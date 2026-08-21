@@ -124,6 +124,10 @@ func _init() -> void:
 	_emit(f, "D placed_towers=%d wave=%d state=%s ticks=%d core_hp=%d zombies_left=%d" % [
 		placed_towers, sim6.wave, sim6.state, t3, core_hp_d, sim6.zombies.size()])
 
+	# —— 场景 E：防御塔确实开火（动画/子弹事件的数据源验证）——
+	_emit(f, "E total_shots=%d fire_events_ok=%s" % [
+		sim6.total_shots, "true" if sim6.total_shots > 0 else "false"])
+
 	_emit(f, "VALIDATE_OK")
 	f.close()
 	quit()

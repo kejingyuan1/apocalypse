@@ -28,6 +28,7 @@
 - **已可构建并运行**：`Godot_v4.6.3-stable_win64_console.exe --headless --path . --script res://tools/validate.gd` 输出 `VALIDATE_OK`；`--path .` 窗口化可进入 `main.tscn`。
 - **2026-08-21 追加修复**：窗口化首次跑时发现「画面只有左上角一个小灰点」，原因是 6×6 初始网格放不下 GDD 指定的 4×4 指挥核心 + 3×3 防御房，且无相机/网格背景。已修复（见 §七 Phase C 追加修复记录）。
 - **2026-08-21 视觉大修**：抛弃拉伸后的低清像素精灵，改用矢量色块 + 中文符号 + 高光阴影 + HP 条 + 悬停射程预览 + 底部 HUD 面板，画面已从「调试视图」变为可识别的游戏界面（见 §七 Phase C 视觉大修记录）。
+- **2026-08-21 体验重做**：改为山中堡垒主题（18×18 凿空山体 + 四向山洞出入口）、横屏填满、全动画系统（丧尸行走摆动、防御塔瞄准炮口闪光、子弹曳光、核心脉动、生产冒烟、受击闪白、出生/死亡粒子、环境浮尘），并新增 `fire_events/hit_events` 作为服务端权威动画数据源（见 §七 Phase C 体验重做记录）。
 
 ---
 
@@ -94,9 +95,10 @@
 - D2 能源网络（Supply/Demand/降载 T4→T0，能源 §3.3）
 - D3 经济（生产产出/软上限/波次消耗，经济 §3）
 
-### Phase E — 美术动画化
+### Phase E — 美术动画化（矢量动画已先行落地）
 
-- `AnimatedSprite2D` + 精灵表（idle/walk/attack），美术 §8 帧率
+- **已完成（MVP 阶段）**：在 `main.gd` 中用 `_draw()` 实现全套程序化动画：丧尸行走摆动/朝向、防御塔瞄准与炮口闪光、子弹曳光、核心脉动、生产房冒烟、受击闪白、出生/死亡粒子、环境浮尘。
+- 后续若需逐帧精灵：`AnimatedSprite2D` + 精灵表（idle/walk/attack），美术 §8 帧率
 
 ### Phase F — 服务器权威迁移（ADR-002）
 
@@ -212,16 +214,31 @@
     - 战斗/胜利/失败时弹出中央大字消息并自动淡出。
 - **结果**：沙箱内已用临时截图验证，画面呈现：居中网格、彩色色块房间、清晰符号、底部 HUD 面板，整体从调试视图升级为可识别的游戏界面。headless 验证仍通过。
 
+### Phase C 体验重做记录（2026-08-21 四次：山中堡垒、横屏填满、全动画）
+
+- **用户反馈**：画面没有背景、不像末日堡垒、没有动图、横屏没填满、像贴图。
+- **设计**：将 18×18 网格表现为「凿穿山体内腔」：四周山体岩石 + 顶部钟乳石 + 四向山洞出入口；出入口同时作为 PVE 尸潮涌入点和 PVP 进攻/防守通道（北=主前门，南/东/西=侧翼）。
+- **改动**：
+  - `project.godot`：设 1280×720 横向视口、最大化启动、`canvas_items` 拉伸填满。
+  - `core/battle_sim.gd`：新增 `entrances`（网格四边中点外侧山洞口），`_spawn_pos()` 改为从出入口涌出；新增 `fire_events`/`hit_events`/`total_shots`（服务端权威动画数据源），`_defense_fire()` 生成开火/命中事件。
+  - `main.gd`：
+    - 横屏填满：`Camera2D` 按窗口可用区域动态缩放，山体背景巨幅覆盖全屏。
+    - 山中堡垒：`_draw_mountain()` 绘制洞外深渊、岩石外框、钟乳石、凿空地面、核心暖光、四向山洞门（"洞"）。
+    - 全动画：丧尸带肢体摆动/眼睛朝向/身体挤压；防御塔底座旋转 + 炮管瞄准 + 炮口闪光；子弹曳光；核心脉动 + HP 环；生产房烟囱冒烟；受击闪白 + 火花/血尘粒子；建造放置弹跳环；环境浮尘。
+  - `hud.gd`：响应窗口尺寸变化，顶部状态条 + 底部全宽半透明面板（资源卡 / 选中房间 / 键位），中央大字消息。
+- **结果**：沙箱内 `--shot` 截图验证显示：横屏全屏、山中洞窟、丧尸从山洞涌入、防御塔开火、核心脉动、生产冒烟；headless 验证通过并新增场景 E 校验 `total_shots>0`。
+
 ### 本地验证（重要）
 
 - **沙箱内可运行 `Godot_v4.6.3-stable_win64_console.exe`**：之前误报「拒绝访问」是因为使用了外层目录名带 `.exe` 的非控制台二进制；改用 `Godot_v4.6.3-stable_win64_console.exe` 可正常执行 headless 与窗口化命令。本次修复后已在本沙箱实测：
   ```text
   VALIDATE_START godot=4.6.3-stable (official) main_ok=true hud_ok=true
-  A spawn=8 wave=1 state=fail ticks=11 zombies_left=5 scrap=120 biomass=50 core_hp=-45
+  A spawn=8 wave=1 state=fail ticks=15 zombies_left=6 scrap=120 biomass=50 core_hp=0
   DETERMINISTIC=true
-  B walls_before=12 walls_after=11 wave=1 state=fail ticks=16 core_hp=-102
+  B walls_before=12 walls_after=9 wave=1 state=fail ticks=15 core_hp=-42
   C cost_paid=40 refund=20 after_demo=180 cmd_guard_ok=true cap_scrap=500 cap_biomass=300
-  D placed_towers=5 wave=1 state=build ticks=3 core_hp=600 zombies_left=0
+  D placed_towers=5 wave=1 state=build ticks=4 core_hp=600 zombies_left=0
+  E total_shots=17 fire_events_ok=true
   VALIDATE_OK
   ```
 - **命令**（在仓库 `fortress/` 目录下）：
@@ -230,6 +247,8 @@
   Godot_v4.6.3-stable_win64_console.exe --headless --path . --script res://tools/validate.gd
   # 实时试玩
   Godot_v4.6.3-stable_win64_console.exe --path .
+  # 开发期自动截图（自动布防+开波+0.7s 后截图退出）
+  Godot_v4.6.3-stable_win64_console.exe --path . --shot
   ```
   前者会在终端打印 `VALIDATE_OK` 及各场景结果；脚本并 `preload` `main.gd`/`hud.gd` 强制渲染层可编译。后者进 `main.tscn` 即可 建造→空格开波→守→扩张，建造态下右键/X 拆房、U 升级。
-- **窗口化渲染已在本沙箱启动验证**：`--path .` 能正常初始化 OpenGL (Intel Iris Xe) 并进入窗口，因无截图工具未留存像素级截图，但脚本逻辑层已通过无头验证。
+- **窗口化渲染已在本沙箱启动并截图验证**：`--path .` 能正常初始化 OpenGL (Intel Iris Xe) 并进入窗口；`--path . --shot` 自动布防后开第 1 波，在战斗中（状态：战斗、剩余丧尸：8）成功截取像素级截图，画面已呈现横屏山中堡垒 + 山洞出入口 + 丧尸涌入 + 防御塔开火 + 核心脉动 + 生产冒烟。

@@ -43,11 +43,30 @@ var core_id: int = -1
 var next_id: int = 0
 var rng: RandomNumberGenerator
 
+# —— 动画/渲染事件（服务端权威产出，客户端消费做子弹/粒子，不回写逻辑）——
+var fire_events: Array = []     # 本 tick 防御开火：{from:Vector2(单元), to:Vector2(单元)}
+var hit_events: Array = []      # 本 tick 命中（丧尸受击）位置 Vector2(单元)
+var total_shots: int = 0        # 累计开火数（验证用）
+var entrances: Array = []       # 山洞出入口（单元坐标，位于网格外缘；PVE 尸潮涌入点 / PVP 敌方主攻方向）
+
 func _init(g: GridModel) -> void:
 	grid = g
 	rng = RandomNumberGenerator.new()
 	rng.seed = 12345             # 固定种子 → 确定性回放（ADR-004）
 	_refresh_core()
+	_compute_entrances()
+
+# 山洞出入口：网格四边中点外侧一格（凿穿山体形成的隧道口）
+# 北=前门(主 PVE 尸潮 / PVP 敌方主攻)，南/东/西=侧翼 PVE 涌入点
+func _compute_entrances() -> void:
+	var n: int = grid.size
+	var mid: int = int(n / 2)
+	entrances = [
+		Vector2(mid + 0.5, -0.5),     # 北（前门）
+		Vector2(mid + 0.5, n + 0.5),  # 南
+		Vector2(n + 0.5, mid + 0.5),  # 东
+		Vector2(-0.5, mid + 0.5),     # 西
+	]
 
 func _refresh_core() -> void:
 	core_id = -1
@@ -106,6 +125,7 @@ func begin_wave(w: int) -> void:
 		return
 	wave = w
 	state = "combat"
+	_compute_entrances()   # 网格可能已扩建，重算出入口
 	var n: int = WaveManager.count(w)
 	for i in range(n):
 		var k: int = Zombie.Kind.WALKER
@@ -121,19 +141,17 @@ func begin_wave(w: int) -> void:
 		zombies.append(z)
 
 func _spawn_pos() -> Vector2:
-	var edge: int = rng.randi_range(0, 3)
-	var s: int = grid.size
-	var r: int = rng.randi_range(0, s - 1)
-	match edge:
-		0: return Vector2(-0.5, r + 0.5)        # 左
-		1: return Vector2(s + 0.5, r + 0.5)     # 右
-		2: return Vector2(r + 0.5, -0.5)        # 上
-		_: return Vector2(r + 0.5, s + 0.5)     # 下
+	if entrances.is_empty():
+		_compute_entrances()
+	# 从随机一个山洞出入口涌入
+	return entrances[rng.randi_range(0, entrances.size() - 1)]
 
 # —— 固定 tick：推进一秒战斗结算 ——
 func tick() -> void:
 	if state != "combat":
 		return
+	fire_events.clear()
+	hit_events.clear()
 	for z in zombies:
 		z.prev_pos = z.pos
 	var dist: Dictionary = _bfs_dist_to_core()
@@ -313,6 +331,9 @@ func _defense_fire() -> void:
 				target = z
 		if target != null:
 			target.hp -= DEFENSE_DMG
+			fire_events.append({"from": center, "to": target.pos})
+			hit_events.append(target.pos)
+			total_shots += 1
 
 func _room_center(r: Dictionary) -> Vector2:
 	var sum := Vector2.ZERO
@@ -336,6 +357,7 @@ func _settle_wave() -> void:
 	if wave % 3 == 0 and level < 6:
 		level += 1
 		grid.set_level(level)
+		_compute_entrances()   # 网格扩建后重算出入口
 	if wave >= 10:
 		state = "win"
 	else:
