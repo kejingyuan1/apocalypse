@@ -39,6 +39,7 @@ var fire_events: Array = []      # 本 tick 防御开火：{from:Vector2(单元)
 var hit_events: Array = []       # 本 tick 命中（进攻单位受击）位置 Vector2(单元)
 var total_shots: int = 0         # 累计开火数（验证用）
 var army_total: int = 0          # 初始总兵力
+var waypoints: Array = []        # Vector2 路径点（单元坐标），部队优先前往
 
 func _init(g: GridModel) -> void:
 	grid = g
@@ -93,6 +94,33 @@ func _build_enemy_base() -> void:
 	# 标记笼罩范围：每个房间（含城墙）外扩 1 格禁止敌方下兵（COC 式建筑保护范围）
 	_rebuild_deploy_blocked()
 
+# —— 布局导出/加载（基地编辑器 + PVP 保存）——
+func export_layout() -> Dictionary:
+	var rooms: Array = []
+	for id: int in grid.rooms:
+		var r: Dictionary = grid.rooms[id]
+		rooms.append({"type": int(r["type"]), "origin": {"x": int(r["origin"].x), "y": int(r["origin"].y)}})
+	return {"version": 1, "grid_size": grid.size, "rooms": rooms}
+
+func load_layout(layout: Dictionary) -> bool:
+	if not layout.has("rooms"):
+		return false
+	# 清空现有房间（保留网格尺寸）
+	for id: int in grid.rooms.keys():
+		grid.demolish(id)
+	core_id = -1
+	# 按顺序放置，确保核心存在
+	var rooms: Array = layout["rooms"]
+	for entry: Dictionary in rooms:
+		var t: int = int(entry["type"])
+		var ox: int = int(entry["origin"]["x"])
+		var oy: int = int(entry["origin"]["y"])
+		var id: int = grid.place(t, Vector2i(ox, oy))
+		if id >= 0 and t == RoomDefs.Type.COMMAND:
+			core_id = id
+	_rebuild_deploy_blocked()
+	return true
+
 func _rebuild_deploy_blocked() -> void:
 	blocked_deploy.clear()
 	for rid in grid.rooms:
@@ -130,6 +158,14 @@ func army_left() -> int:
 	for v in army.values():
 		n += v
 	return n
+
+func set_waypoints(pts: Array) -> void:
+	waypoints = []
+	for p in pts:
+		waypoints.append(Vector2(p.x, p.y))
+
+func clear_waypoints() -> void:
+	waypoints = []
 
 # —— 固定 tick：推进一秒战斗结算 ——
 func tick() -> void:
@@ -210,7 +246,37 @@ func _move_unit(u: RefCounted, dist: Dictionary) -> void:
 			if rid == core_id:
 				core_id = -1
 		return
-	# 2. 朝最近建筑移动
+	# 2. 若有路径点，优先朝当前路径点移动
+	if u.waypoint_idx >= 0 and waypoints.size() > 0:
+		if u.waypoint_idx >= waypoints.size():
+			u.waypoint_idx = -1
+		else:
+			var wp: Vector2 = waypoints[u.waypoint_idx]
+			if u.pos.distance_to(wp) < 1.0:
+				u.waypoint_idx += 1
+				if u.waypoint_idx >= waypoints.size():
+					u.waypoint_idx = -1
+				else:
+					wp = waypoints[u.waypoint_idx]
+			if u.waypoint_idx >= 0:
+				var best_wp: Vector2i = cur
+				var best_wd: float = cur.distance_squared_to(wp)
+				for n: Vector2i in _neighbors(cur):
+					if grid.occupied.has(n):
+						continue
+					var dd: float = n.distance_squared_to(wp)
+					if dd < best_wd:
+						best_wd = dd
+						best_wp = n
+				if best_wp != cur:
+					var target_wp: Vector2 = Vector2(best_wp.x + 0.5, best_wp.y + 0.5)
+					var to_wp: Vector2 = target_wp - u.pos
+					if to_wp.length() <= u.speed:
+						u.pos = target_wp
+					else:
+						u.pos += to_wp.normalized() * u.speed
+				return
+	# 3. 朝最近建筑移动
 	var best: Vector2i = cur
 	var best_d: int = dist.get(cur, 2147483647)
 	for n in _neighbors(cur):

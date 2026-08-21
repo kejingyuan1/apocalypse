@@ -69,6 +69,20 @@ func _init() -> void:
 	# —— 场景 C：防御塔开火（动画/子弹事件数据源）——
 	_emit(f, "C total_shots=%d fire_ok=%s" % [sim.total_shots, "true" if sim.total_shots > 0 else "false"])
 
+	# —— 场景 D：基地编辑器布局导出/加载 ——
+	var g_fresh := GridModel.new()
+	var sim_fresh := BattleSim.new(g_fresh)
+	var layout: Dictionary = sim_fresh.export_layout()
+	var g3 := GridModel.new()
+	var sim3 := BattleSim.new(g3)
+	var before_count: int = g3.rooms.size()
+	var ok_load: bool = sim3.load_layout(layout)
+	var after_core: int = sim3.core_id
+	var after_count: int = g3.rooms.size()
+	_emit(f, "D layout_load=%s before_rooms=%d after_rooms=%d core_ok=%s" % [
+		"true" if ok_load else "false", before_count, after_count,
+		"true" if after_core >= 0 else "false"])
+
 	_emit(f, "VALIDATE_OK")
 	f.close()
 	quit()

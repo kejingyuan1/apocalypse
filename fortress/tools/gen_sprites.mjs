@@ -141,28 +141,39 @@ function drawZombie(b, f, base, kind) {
   }
 }
 
-// 防御塔：默认炮管朝上（运行时用节点 rotation 瞄准）
-function drawTurret(b, fireFrame) {
+// 防御塔：拆成「底座」+「炮管」。底座不旋转；炮管单独精灵，由程序旋转。
+function drawTurretBase(b) {
   const cx = FRAME/2, cy = FRAME/2+4;
   b.ellipse(cx, 56, 17, 5, C(0,0,0,80));
-  // 底座
-  b.circle(cx, cy, 21, C(70,76,84));
-  b.circle(cx, cy, 16, C(110,118,128));
-  b.circle(cx, cy, 16, C(110,118,128)); // 环
-  b.circle(cx, cy, 12, C(64,70,78));
-  // 旋转指示点
-  b.circle(cx+10, cy-6, 2.5, C(120,200,255,200));
-  // 炮管（朝上即 -y）
-  b.rrect(cx-5, cy-30, 10, 22, 3, C(140,148,158));
-  b.rrect(cx-5, cy-30, 10, 6, 3, C(180,188,198));
+  // 厚重底座
+  b.circle(cx, cy, 23, C(60,66,74));
+  b.circle(cx, cy, 19, C(86,94,104));
+  b.circle(cx, cy, 15, C(64,70,78));
+  // 旋转轴凹槽
+  b.circle(cx, cy, 8, C(44,50,58));
+  b.circle(cx, cy, 4, C(120,200,255,200));
+  // 螺栓细节
+  for (const [bx,by] of [[cx-14,cy-10],[cx+14,cy-10],[cx-14,cy+10],[cx+14,cy+10]]) {
+    b.circle(bx, by, 2, C(40,44,48));
+    b.circle(bx, by, 1, C(70,76,84));
+  }
+}
+
+function drawTurretBarrel(b, fireFrame) {
+  const cx = FRAME/2, cy = FRAME/2+4; // 旋转轴心与底座一致
+  // 炮管朝 -y，根部在 (cx,cy)，顶端在 (cx, cy-30)
+  b.rrect(cx-5, cy-30, 10, 30, 3, C(140,148,158));
+  b.rrect(cx-4, cy-29, 8, 16, 2, C(180,188,198));
   b.circle(cx, cy-30, 6, C(90,96,104));
+  // 炮口散热环
+  b.rrect(cx-6, cy-34, 12, 5, 2, C(110,118,128));
   // 开火闪光（fireFrame: 0无 1大 2中 3小）
   if (fireFrame >= 1) {
     const fl = [0, 14, 9, 5][fireFrame] || 0;
-    b.circle(cx, cy-32, fl, C(255,230,150,230));
-    b.circle(cx, cy-32, fl*0.5, C(255,255,230,255));
-    if (fireFrame === 1) { // 曳光起点
-      b.line(cx, cy-32, cx, cy-46, C(255,220,120,180), 3);
+    b.circle(cx, cy-36, fl, C(255,230,150,230));
+    b.circle(cx, cy-36, fl*0.5, C(255,255,230,255));
+    if (fireFrame === 1) {
+      b.line(cx, cy-36, cx, cy-50, C(255,220,120,180), 3);
     }
   }
 }
@@ -261,8 +272,8 @@ console.log('生成末日堡垒精灵表...');
 sheet('zombie_walker', 4, (b,f)=>drawZombie(b,f,C(150,180,90),'walker'));
 sheet('zombie_runner', 4, (b,f)=>drawZombie(b,f,C(200,80,70),'runner'));
 sheet('zombie_spitter',4, (b,f)=>drawZombie(b,f,C(170,90,190),'spitter'));
-sheet('turret_idle', 1, (b,f)=>drawTurret(b,0));
-sheet('turret_fire', 4, (b,f)=>drawTurret(b,f));
+sheet('turret_base',  1, (b,f)=>drawTurretBase(b));
+sheet('turret_barrel', 4, (b,f)=>drawTurretBarrel(b,f));
 sheet('core', 4, (b,f)=>drawCore(b,f));
 sheet('production', 4, (b,f)=>drawProduction(b,f));
 sheet('wall', 2, (b,f)=>drawWall(b, f===1));

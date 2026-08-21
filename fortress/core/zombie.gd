@@ -15,6 +15,7 @@ var max_hp: int = 20
 var pos: Vector2 = Vector2.ZERO       # 单元坐标（cell-center 基），由战斗核推进
 var prev_pos: Vector2 = Vector2.ZERO  # 上一 tick 位置，供插值渲染
 var speed: float = BASE_SPEED
+var waypoint_idx: int = 0             # 路径点索引，-1 表示已完成所有路径点
 
 # HP 类型系数（逐字引用概念 §9.1 / 波次 §3.2 类型系数）
 static func _hp_coef(kind: int) -> float:

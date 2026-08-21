@@ -41,10 +41,11 @@ const COLOR_BULLET := Color(1.0, 0.92, 0.55)
 # —— 精灵表配置（AtlasTexture 切片）——
 const ROOM_SHEETS := {
 	RoomDefs.Type.WALL:       {"path": "res://assets/sheets/wall.png",       "anim": "wall",  "frames": 2, "fps": 1.0},
-	RoomDefs.Type.DEFENSE:    {"path": "res://assets/sheets/turret_idle.png", "anim": "idle",  "frames": 1, "fps": 1.0},
 	RoomDefs.Type.PRODUCTION: {"path": "res://assets/sheets/production.png",  "anim": "work",  "frames": 4, "fps": 5.0},
 	RoomDefs.Type.COMMAND:    {"path": "res://assets/sheets/core.png",        "anim": "pulse", "frames": 4, "fps": 6.0},
 }
+const TURRET_BASE_SHEET  := {"path": "res://assets/sheets/turret_base.png",  "anim": "base",  "frames": 1, "fps": 1.0}
+const TURRET_BARREL_SHEET := {"path": "res://assets/sheets/turret_barrel.png", "anim": "fire",  "frames": 4, "fps": 12.0}
 const ZOMBIE_SHEETS := {
 	Zombie.Kind.WALKER: "res://assets/sheets/zombie_walker.png",
 	Zombie.Kind.RUNNER: "res://assets/sheets/zombie_runner.png",
@@ -55,7 +56,28 @@ const ZOMBIE_SHEETS := {
 
 var grid: GridModel
 var sim: BattleSim
-var selected_kind: int = Zombie.Kind.WALKER
+
+# 模式："attack" = COC 式进攻；"editor" = 基地编辑器
+var game_mode: String = "attack"
+
+# 进攻模式：多选兵种 + 拖拽下兵 + 路径点
+var selected_kinds: Array = [Zombie.Kind.WALKER]
+var drag_deploying: bool = false
+var last_deploy_cell: Vector2i = Vector2i(-1, -1)
+var deploy_cooldown: float = 0.0
+const DEPLOY_INTERVAL: float = 0.045
+var waypoints: Array = []            # Vector2 单元坐标
+var waypoint_pulse: float = 0.0
+
+# 编辑器模式
+var editor_selected_type: int = RoomDefs.Type.WALL
+const EDITOR_ROOM_KEYS: Dictionary = {
+	KEY_Q: RoomDefs.Type.WALL,
+	KEY_W: RoomDefs.Type.DEFENSE,
+	KEY_E: RoomDefs.Type.PRODUCTION,
+	KEY_R: RoomDefs.Type.COMMAND,
+}
+
 var tick_acc: float = 0.0
 var camera: Camera2D
 var anim_time: float = 0.0
@@ -91,7 +113,8 @@ var dust_acc: float = 0.0
 var smoke_acc: Dictionary = {}
 
 # —— 实体精灵实例 ——
-var room_sprites: Dictionary = {}
+var room_sprites: Dictionary = {}   # 非防御房间 id -> AnimatedSprite2D
+var turret_nodes: Dictionary = {}   # 防御塔 id -> {pivot:Node2D, base:AnimatedSprite2D, barrel:AnimatedSprite2D}
 var unit_sprites: Dictionary = {}
 var _frames_cache: Dictionary = {}
 var _shot_pending: bool = false
@@ -101,10 +124,14 @@ var _intro_tween: Tween = null
 func _ready() -> void:
 	_setup_layers()
 	grid = GridModel.new()
+	if OS.get_cmdline_args().has("--editor"):
+		game_mode = "editor"
 	# 战斗内核会自行设定网格尺寸并生成敌方基地
 	sim = BattleSim.new(grid)
 	_setup_camera()
 	_setup_background()
+	if game_mode == "attack":
+		_try_load_saved_layout()
 	_sync_rooms()
 	_sync_state()
 	_intro_camera()
@@ -179,10 +206,22 @@ func _set_background(idx: int) -> void:
 # ===================== 输入 =====================
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-			_cancel_intro()
-			if sim.state == "deploy" or sim.state == "combat":
-				deploy_at(world_to_cell(get_global_mouse_position()))
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				_cancel_intro()
+				var c: Vector2i = world_to_cell(get_global_mouse_position())
+				if game_mode == "editor":
+					_editor_place(c)
+				else:
+					if event.shift_pressed:
+						_add_waypoint(Vector2(c.x + 0.5, c.y + 0.5))
+					else:
+						drag_deploying = true
+						last_deploy_cell = Vector2i(-1, -1)
+						_drag_deploy(c)
+			else:
+				drag_deploying = false
+				last_deploy_cell = Vector2i(-1, -1)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
 			_cancel_intro()
 			_zoom_at(get_global_mouse_position(), 1.15)
@@ -192,21 +231,44 @@ func _input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
 			if event.pressed:
 				_cancel_intro()
-				_panning = true
-				_pan_start = get_global_mouse_position()
-				_cam_start = camera.position
+				if game_mode == "editor":
+					_editor_remove(world_to_cell(get_global_mouse_position()))
+				else:
+					_panning = true
+					_pan_start = get_global_mouse_position()
+					_cam_start = camera.position
 			else:
 				_panning = false
-	elif event is InputEventMouseMotion and _panning:
-		camera.position = _cam_start - (get_global_mouse_position() - _pan_start) / camera.zoom
+	elif event is InputEventMouseMotion:
+		if _panning:
+			camera.position = _cam_start - (get_global_mouse_position() - _pan_start) / camera.zoom
+		elif drag_deploying and game_mode == "attack":
+			var c: Vector2i = world_to_cell(get_global_mouse_position())
+			if c != last_deploy_cell and deploy_cooldown <= 0.0:
+				_drag_deploy(c)
 	elif event is InputEventMagnifyGesture:
 		_zoom_at(camera.position, event.factor)
 	elif event is InputEventKey and event.pressed:
-		match event.keycode:
-			KEY_1: selected_kind = Zombie.Kind.WALKER
-			KEY_2: selected_kind = Zombie.Kind.RUNNER
-			KEY_3: selected_kind = Zombie.Kind.SPITTER
-			KEY_B: _set_background(bg_index + 1)
+		if game_mode == "attack":
+			match event.keycode:
+				KEY_1: _toggle_kind(Zombie.Kind.WALKER)
+				KEY_2: _toggle_kind(Zombie.Kind.RUNNER)
+				KEY_3: _toggle_kind(Zombie.Kind.SPITTER)
+				KEY_C:
+					waypoints.clear()
+					sim.clear_waypoints()
+				KEY_B: _set_background(bg_index + 1)
+		else:
+			if EDITOR_ROOM_KEYS.has(event.keycode):
+				editor_selected_type = EDITOR_ROOM_KEYS[event.keycode]
+			elif event.keycode == KEY_DELETE or event.keycode == KEY_BACKSPACE:
+				_editor_remove(world_to_cell(get_global_mouse_position()))
+			elif event.keycode == KEY_S and event.ctrl_pressed:
+				_save_layout()
+			elif event.keycode == KEY_L and event.ctrl_pressed:
+				_load_layout()
+			elif event.keycode == KEY_N and event.ctrl_pressed:
+				_editor_clear()
 		_sync_state()
 
 func _zoom_at(world_p: Vector2, factor: float) -> void:
@@ -219,16 +281,135 @@ func _zoom_at(world_p: Vector2, factor: float) -> void:
 func world_to_cell(p: Vector2) -> Vector2i:
 	return Vector2i(floor(p.x / TILE), floor(p.y / TILE))
 
-func deploy_at(c: Vector2i) -> void:
-	var ok: bool = sim.deploy(selected_kind, c)
-	if ok:
+func _drag_deploy(c: Vector2i) -> void:
+	if sim.state != "deploy" and sim.state != "combat":
+		return
+	if c == last_deploy_cell:
+		return
+	last_deploy_cell = c
+	# 多选时按顺序循环使用已选兵种
+	var kind: int = _cycle_selected_kind()
+	if sim.deploy(kind, c):
 		var rc := Vector2(c.x * TILE + TILE / 2.0, c.y * TILE + TILE / 2.0)
-		_spawn_dust(rc, COLOR_UNIT[selected_kind], 0.8)
+		_spawn_dust(rc, COLOR_UNIT[kind], 0.8)
+		deploy_cooldown = DEPLOY_INTERVAL
 		_sync_state()
+
+func _cycle_selected_kind() -> int:
+	if selected_kinds.is_empty():
+		selected_kinds = [Zombie.Kind.WALKER]
+	var idx: int = 0
+	if selected_kinds.size() > 1:
+		idx = int(anim_time * 10.0) % selected_kinds.size()
+	return selected_kinds[idx]
+
+func _toggle_kind(kind: int) -> void:
+	if selected_kinds.has(kind):
+		if selected_kinds.size() > 1:
+			selected_kinds.erase(kind)
+	else:
+		selected_kinds.append(kind)
+
+func _is_kind_selected(kind: int) -> bool:
+	return selected_kinds.has(kind)
+
+func _add_waypoint(cell_center: Vector2) -> void:
+	if waypoints.size() >= 5:
+		waypoints.pop_front()
+	waypoints.append(cell_center)
+	sim.set_waypoints(waypoints)
+	_spawn_ring(cell_center * TILE, Color(0.2, 0.9, 0.9, 0.7))
+
+# 兼容旧接口：单点下兵仍可用（当前由拖拽函数覆盖）
+func deploy_at(c: Vector2i) -> void:
+	_drag_deploy(c)
+
+# ===================== 基地编辑器 =====================
+func _editor_place(c: Vector2i) -> void:
+	var s: Vector2i = RoomDefs.size(editor_selected_type)
+	var origin := Vector2i(c.x, c.y)
+	if not _in_base_region(origin, s):
+		return
+	var id: int = grid.place(editor_selected_type, origin)
+	if id >= 0:
+		sim._rebuild_deploy_blocked()
+		if editor_selected_type == RoomDefs.Type.COMMAND:
+			sim.core_id = id
+		_sync_rooms()
+		fx_layer.queue_redraw()
+
+func _editor_remove(c: Vector2i) -> void:
+	if grid.occupied.has(c):
+		var id: int = grid.occupied[c]
+		if id == sim.core_id:
+			sim.core_id = -1
+		grid.demolish(id)
+		sim._rebuild_deploy_blocked()
+		_sync_rooms()
+		fx_layer.queue_redraw()
+
+func _editor_clear() -> void:
+	for id: int in grid.rooms.keys():
+		grid.demolish(id)
+	sim.core_id = -1
+	sim._rebuild_deploy_blocked()
+	_sync_rooms()
+	fx_layer.queue_redraw()
+
+func _in_base_region(origin: Vector2i, size: Vector2i) -> bool:
+	var x0: int = BattleSim.BASE_OFFSET
+	var y0: int = BattleSim.BASE_OFFSET
+	var x1: int = BattleSim.BASE_OFFSET + BattleSim.BASE_REGION
+	var y1: int = BattleSim.BASE_OFFSET + BattleSim.BASE_REGION
+	return origin.x >= x0 and origin.y >= y0 and origin.x + size.x <= x1 and origin.y + size.y <= y1
+
+const LAYOUT_PATH := "user://base_layout.json"
+
+func _try_load_saved_layout() -> void:
+	_load_layout_from(LAYOUT_PATH)
+
+func _save_layout() -> void:
+	var dict: Dictionary = sim.export_layout()
+	var file := FileAccess.open(LAYOUT_PATH, FileAccess.WRITE)
+	if file:
+		file.store_string(JSON.stringify(dict, "\t"))
+		file.close()
+		_show_toast("布局已保存", Color(0.4, 0.9, 0.4))
+	else:
+		_show_toast("保存失败", Color(0.9, 0.3, 0.3))
+
+func _load_layout() -> void:
+	_load_layout_from(LAYOUT_PATH)
+
+func _load_layout_from(path: String) -> bool:
+	if not FileAccess.file_exists(path):
+		return false
+	var file := FileAccess.open(path, FileAccess.READ)
+	if not file:
+		return false
+	var text: String = file.get_as_text()
+	file.close()
+	var parsed = JSON.parse_string(text)
+	if parsed == null or typeof(parsed) != TYPE_DICTIONARY:
+		return false
+	var ok: bool = sim.load_layout(parsed)
+	if ok:
+		_sync_rooms()
+		_sync_state()
+		fx_layer.queue_redraw()
+		_show_toast("布局已加载", Color(0.4, 0.9, 0.4))
+	return ok
+
+func _show_toast(text: String, col: Color) -> void:
+	if hud:
+		hud.show_toast(text, col)
 
 # ===================== 主循环 =====================
 func _process(delta: float) -> void:
 	anim_time += delta
+	if deploy_cooldown > 0.0:
+		deploy_cooldown = max(0.0, deploy_cooldown - delta)
+	waypoint_pulse = fmod(waypoint_pulse + delta * 2.5, TAU)
 	_update_particles(delta)
 	_update_bullets(delta)
 	_decay(room_flash, delta)
@@ -239,7 +420,7 @@ func _process(delta: float) -> void:
 	_update_turret_aim(delta)
 	_sync_rooms()
 	_sync_units()
-	if sim.state == "combat":
+	if sim.state == "combat" and game_mode == "attack":
 		tick_acc += delta
 		if tick_acc >= BattleSim.TICK:
 			tick_acc -= BattleSim.TICK
@@ -280,8 +461,8 @@ func _consume_sim_events() -> void:
 		if tid >= 0:
 			turret_flash[tid] = 0.12
 			turret_targets[tid] = ev["to"] * TILE
-			if room_sprites.has(tid):
-				room_sprites[tid].play("fire")
+			if turret_nodes.has(tid):
+				turret_nodes[tid].barrel.play("fire")
 	for ev: Vector2 in sim.hit_events:
 		_spawn_spark(ev * TILE, COLOR_BULLET, 0.25)
 		_spawn_spark(ev * TILE, COLOR_UNIT[Zombie.Kind.WALKER], 0.3)
@@ -372,23 +553,35 @@ func _make_frames(path: String, anim: String, frame_count: int, fps: float, loop
 	_frames_cache[key] = sf
 	return sf
 
-func _make_turret_frames() -> SpriteFrames:
-	var key := "TURRET"
+func _make_turret_base_frames() -> SpriteFrames:
+	var key := "TURRET_BASE"
 	if _frames_cache.has(key):
 		return _frames_cache[key]
-	var idle_tex := load("res://assets/sheets/turret_idle.png") as Texture2D
-	var fire_tex := load("res://assets/sheets/turret_fire.png") as Texture2D
+	var cfg = TURRET_BASE_SHEET
+	var sf := _make_frames(cfg.path, cfg.anim, cfg.frames, cfg.fps, true)
+	_frames_cache[key] = sf
+	return sf
+
+func _make_turret_barrel_frames() -> SpriteFrames:
+	var key := "TURRET_BARREL"
+	if _frames_cache.has(key):
+		return _frames_cache[key]
+	var cfg = TURRET_BARREL_SHEET
+	var tex := load(cfg.path) as Texture2D
 	var sf := SpriteFrames.new()
 	sf.add_animation("idle")
 	sf.set_animation_speed("idle", 1.0)
 	sf.set_animation_loop("idle", true)
-	var at0 := AtlasTexture.new(); at0.atlas = idle_tex; at0.region = Rect2(0, 0, idle_tex.get_width(), idle_tex.get_height()); sf.add_frame("idle", at0)
+	var at0 := AtlasTexture.new()
+	at0.atlas = tex
+	at0.region = Rect2(0, 0, SPRITE_SIZE, SPRITE_SIZE)
+	sf.add_frame("idle", at0)
 	sf.add_animation("fire")
-	sf.set_animation_speed("fire", 12.0)
+	sf.set_animation_speed("fire", cfg.fps)
 	sf.set_animation_loop("fire", false)
-	for i: int in range(4):
+	for i: int in range(cfg.frames):
 		var at := AtlasTexture.new()
-		at.atlas = fire_tex
+		at.atlas = tex
 		at.region = Rect2(i * SPRITE_SIZE, 0, SPRITE_SIZE, SPRITE_SIZE)
 		sf.add_frame("fire", at)
 	_frames_cache[key] = sf
@@ -396,48 +589,60 @@ func _make_turret_frames() -> SpriteFrames:
 
 func _sync_rooms() -> void:
 	for id: int in grid.rooms:
-		if room_sprites.has(id):
-			continue
 		var r: Dictionary = grid.rooms[id]
 		var type: int = r["type"]
-		var sp := AnimatedSprite2D.new()
-		match type:
-			RoomDefs.Type.DEFENSE:
-				sp.sprite_frames = _make_turret_frames()
-				sp.play("idle")
-				sp.animation_finished.connect(func(): _on_turret_finished(id))
-			RoomDefs.Type.WALL:
-				var cfg = ROOM_SHEETS[RoomDefs.Type.WALL]
-				sp.sprite_frames = _make_frames(cfg.path, cfg.anim, cfg.frames, cfg.fps, false)
-				sp.play("wall")
-			_:
+		var center: Vector2 = _room_center_world(r)
+		if type == RoomDefs.Type.DEFENSE:
+			if not turret_nodes.has(id):
+				var pivot := Node2D.new()
+				pivot.position = center
+				var base := AnimatedSprite2D.new()
+				base.sprite_frames = _make_turret_base_frames()
+				base.play("base")
+				base.position = center
+				var barrel := AnimatedSprite2D.new()
+				barrel.sprite_frames = _make_turret_barrel_frames()
+				barrel.play("idle")
+				barrel.animation_finished.connect(func(): _on_barrel_finished(id))
+				pivot.add_child(barrel)
+				unit_layer.add_child(base)
+				unit_layer.add_child(pivot)
+				turret_nodes[id] = {"pivot": pivot, "base": base, "barrel": barrel}
+			else:
+				turret_nodes[id].pivot.position = center
+				turret_nodes[id].base.position = center
+			var aim: float = float(turret_aim.get(id, 0.0))
+			turret_nodes[id].pivot.rotation = aim
+		else:
+			if not room_sprites.has(id):
+				var sp := AnimatedSprite2D.new()
 				var cfg = ROOM_SHEETS[type]
 				sp.sprite_frames = _make_frames(cfg.path, cfg.anim, cfg.frames, cfg.fps, true)
 				sp.play(cfg.anim)
-		sp.position = _room_center_world(r)
-		unit_layer.add_child(sp)
-		room_sprites[id] = sp
-
-	for id: int in room_sprites:
-		if not grid.rooms.has(id):
-			continue
-		var sp: AnimatedSprite2D = room_sprites[id]
-		var r: Dictionary = grid.rooms[id]
-		sp.position = _room_center_world(r)
-		match r["type"]:
-			RoomDefs.Type.DEFENSE:
-				sp.rotation = float(turret_aim.get(id, 0.0))
-			RoomDefs.Type.WALL:
+				sp.position = center
+				unit_layer.add_child(sp)
+				room_sprites[id] = sp
+			else:
+				room_sprites[id].position = center
+			if type == RoomDefs.Type.WALL:
 				var ratio := float(r["hp"]) / float(RoomDefs.hp(RoomDefs.Type.WALL))
-				sp.frame = 0 if ratio > 0.5 else 1
+				room_sprites[id].frame = 0 if ratio > 0.5 else 1
+
 	for id: int in room_sprites.keys():
 		if not grid.rooms.has(id):
 			room_sprites[id].queue_free()
 			room_sprites.erase(id)
+	for id: int in turret_nodes.keys():
+		if not grid.rooms.has(id):
+			turret_nodes[id].pivot.queue_free()
+			turret_nodes[id].base.queue_free()
+			turret_nodes.erase(id)
 
-func _on_turret_finished(id: int) -> void:
-	if room_sprites.has(id) and room_sprites[id].animation == "fire":
-		room_sprites[id].play("idle")
+func _on_barrel_finished(id: int) -> void:
+	if turret_nodes.has(id):
+		var barrel: AnimatedSprite2D = turret_nodes[id].barrel
+		if barrel.animation == "fire":
+			barrel.play("idle")
 
 func _sync_units() -> void:
 	var cur: Dictionary = {}
@@ -570,7 +775,7 @@ func _sync_state() -> void:
 
 func update_hud() -> void:
 	if hud:
-		hud.set_state(sim.state, sim.army, sim.units.size(), sim.army_total, selected_kind)
+		hud.set_state(sim.state, sim.army, sim.units.size(), sim.army_total, selected_kinds, game_mode, editor_selected_type)
 
 # ===================== 开发期截图 =====================
 func _dev_shot_setup() -> void:
@@ -636,7 +841,9 @@ class FXLayer extends Node2D:
 	func _draw() -> void:
 		_draw_hp_bars()
 		_draw_flashes()
+		_draw_waypoints()
 		_draw_deploy_preview()
+		_draw_editor_preview()
 		_draw_bullets()
 		_draw_particles()
 
@@ -682,6 +889,8 @@ class FXLayer extends Node2D:
 				draw_rect(rect, Color(1, 1, 1, 0.5 * (room_flash[id] / 0.3)))
 
 	func _draw_deploy_preview() -> void:
+		if main.game_mode != "attack":
+			return
 		var grid: GridModel = main.grid
 		var sim: BattleSim = main.sim
 		if sim.state != "deploy" and sim.state != "combat":
@@ -689,14 +898,49 @@ class FXLayer extends Node2D:
 		var c: Vector2i = main.world_to_cell(get_global_mouse_position())
 		if c.x < 0 or c.y < 0 or c.x >= grid.size or c.y >= grid.size:
 			return
-		var ok: bool = (not grid.occupied.has(c))
+		var ok: bool = (not grid.occupied.has(c)) and (not sim.blocked_deploy.has(c))
 		var col: Color = main.COLOR_DEPLOY_OK if ok else main.COLOR_DEPLOY_BAD
 		var rect := Rect2(Vector2(c.x * TILE, c.y * TILE), Vector2(TILE, TILE))
 		draw_rect(rect, col)
 		var cx := c.x * TILE + TILE / 2.0
 		var cy := c.y * TILE + TILE / 2.0
-		draw_circle(Vector2(cx, cy), TILE * 0.28, main.COLOR_UNIT[main.selected_kind])
-		draw_arc(Vector2(cx, cy), TILE * 0.28, 0.0, TAU, 20, Color(1, 1, 1, 0.8), 2.0)
+		# 多选时画叠加小圆表示多个兵种
+		if main.selected_kinds.size() == 1:
+			draw_circle(Vector2(cx, cy), TILE * 0.28, main.COLOR_UNIT[main.selected_kinds[0]])
+			draw_arc(Vector2(cx, cy), TILE * 0.28, 0.0, TAU, 20, Color(1, 1, 1, 0.8), 2.0)
+		else:
+			for i: int in range(main.selected_kinds.size()):
+				var ang: float = TAU * i / main.selected_kinds.size() + main.anim_time * 2.0
+				var pp: Vector2 = Vector2(cx + cos(ang) * TILE * 0.18, cy + sin(ang) * TILE * 0.18)
+				draw_circle(pp, TILE * 0.12, main.COLOR_UNIT[main.selected_kinds[i]])
+
+	func _draw_waypoints() -> void:
+		if main.game_mode != "attack" or main.waypoints.is_empty():
+			return
+		for i: int in range(main.waypoints.size()):
+			var wp: Vector2 = main.waypoints[i]
+			var pos: Vector2 = wp * TILE
+			var pulse: float = 1.0 + sin(main.waypoint_pulse + i * 0.8) * 0.18
+			draw_circle(pos, TILE * 0.35 * pulse, Color(0.2, 0.95, 0.95, 0.35))
+			draw_arc(pos, TILE * 0.35 * pulse, 0.0, TAU, 24, Color(0.2, 0.95, 0.95, 0.9), 2.5)
+		# 连线
+		for i: int in range(main.waypoints.size() - 1):
+			draw_line(main.waypoints[i] * TILE, main.waypoints[i + 1] * TILE, Color(0.2, 0.95, 0.95, 0.5), 2.0)
+
+	func _draw_editor_preview() -> void:
+		if main.game_mode != "editor":
+			return
+		var grid: GridModel = main.grid
+		var c: Vector2i = main.world_to_cell(get_global_mouse_position())
+		var s: Vector2i = RoomDefs.size(main.editor_selected_type)
+		var ok: bool = main._in_base_region(c, s) and grid.can_place(main.editor_selected_type, c)
+		var col: Color = main.COLOR_DEPLOY_OK if ok else main.COLOR_DEPLOY_BAD
+		var rect := Rect2(Vector2(c.x * TILE, c.y * TILE), Vector2(s.x * TILE, s.y * TILE))
+		draw_rect(rect, col)
+		# 半透明填充房间主题色
+		var theme: Color = RoomDefs.color(main.editor_selected_type)
+		theme.a = 0.35
+		draw_rect(rect, theme)
 
 	func _draw_bullets() -> void:
 		for b: Dictionary in main.bullets:
