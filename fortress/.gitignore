@@ -10,8 +10,5 @@ Desktop.ini
 __pycache__/
 *.pyc
 
-# ImageGen 工具原始输出 dump（已整理进 assets/ai/，不重复入库）
-generated-images/
-
 # 已被 assets/art/ 取代的早期占位图目录（本地残留，不入库）
-/fortress/assets/sprites/
+assets/sprites/
