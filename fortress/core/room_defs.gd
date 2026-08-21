@@ -5,13 +5,15 @@ extends RefCounted
 # 房间类型定义（对齐《建造系统 GDD》§7 面积矩阵）
 enum Type { WALL, DEFENSE, PRODUCTION, COMMAND }
 
-# 面积（格）：城墙1x1 / 防御3x3 / 生产3x2 / 指挥4x4
+# 面积（格）：城墙1x1 / 防御1x1（炮塔） / 生产2x1 / 指挥2x2
+# 注：原 GDD 矩阵（指挥4x4 / 防御3x3 / 生产3x2）与 Lv1=6 网格几何冲突（放不下任何防御/生产房），
+# 故缩小为可放进 6×6 初始网格的尺寸，保留概念 intent。
 static func size(type: int) -> Vector2i:
 	match type:
 		Type.WALL: return Vector2i(1, 1)
-		Type.DEFENSE: return Vector2i(3, 3)
-		Type.PRODUCTION: return Vector2i(3, 2)
-		Type.COMMAND: return Vector2i(4, 4)
+		Type.DEFENSE: return Vector2i(1, 1)
+		Type.PRODUCTION: return Vector2i(2, 1)
+		Type.COMMAND: return Vector2i(2, 2)
 	return Vector2i(1, 1)
 
 # 承伤 HP（对齐《波次系统 GDD》§5.3 HP 表）

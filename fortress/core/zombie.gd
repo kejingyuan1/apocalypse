@@ -4,7 +4,7 @@ extends RefCounted
 # 注意：本脚本不使用 class_name；工厂方法通过运行时 load 自身实例化，避免 preload 自引用循环。
 enum Kind { WALKER, RUNNER, SPITTER }
 
-const BASE_SPEED := 20.0       # px/s（Walker 基准，待平衡 pass）
+const BASE_SPEED := 1.5        # cells/s（Walker 基准，待平衡 pass；避免 20 格/秒导致跳墙）
 const HP_BASE := 20
 const HP_GROWTH := 0.15        # 每波 +15%（波次 §3.3）
 

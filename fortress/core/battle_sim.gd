@@ -215,6 +215,10 @@ func _move_zombie(z: Zombie, dist: Dictionary) -> void:
 			best_d = dd
 			best = n
 			best_is_core = _is_core_cell(n)
+	# 距离场未覆盖（如被墙完全隔离）：改为几何向核心推进，遇障则攻击
+	if best_d == 0x7FFFFFFF:
+		_move_toward_core_geometric(z)
+		return
 	if best == cur:
 		_breach_or_attack(z, cur)
 		return
@@ -229,6 +233,30 @@ func _move_zombie(z: Zombie, dist: Dictionary) -> void:
 		z.pos = target
 	else:
 		z.pos += to.normalized() * z.speed
+
+# 几何向核心推进（BFS 不可达时的兜底）：遇墙/房则攻击，打穿后继续
+func _move_toward_core_geometric(z: Zombie) -> void:
+	var cc := _core_center()
+	var to: Vector2 = cc - z.pos
+	var len: float = to.length()
+	if len <= z.speed:
+		z.pos = cc
+		if _is_core_cell(Vector2i(floor(z.pos.x), floor(z.pos.y))):
+			_damage_core(ZOMBIE_CORE_DPS)
+		return
+	var step := to.normalized() * z.speed
+	var next_pos := z.pos + step
+	var next_cell := Vector2i(floor(next_pos.x), floor(next_pos.y))
+	var cur_cell := Vector2i(floor(z.pos.x), floor(z.pos.y))
+	if next_cell != cur_cell and grid.in_bounds(next_cell) and grid.occupied.has(next_cell):
+		var rid: int = grid.occupied[next_cell]
+		grid.rooms[rid]["hp"] -= BREACH_DPS
+		if grid.rooms[rid]["hp"] <= 0:
+			grid.demolish(rid)
+			if rid == core_id:
+				core_id = -1
+	else:
+		z.pos = next_pos
 
 # 受阻时：优先攻击相邻核心；否则破"距核心最近"的阻挡格（HP 归零→breach 变为可通行）
 func _breach_or_attack(z: Zombie, cur: Vector2i) -> void:

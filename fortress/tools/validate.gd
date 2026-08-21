@@ -57,17 +57,19 @@ func _init() -> void:
 	var h2 := _hash_zombies(sim3.zombies)
 	_emit(f, "DETERMINISTIC=" + ("true" if h1 == h2 else "false"))
 
-	# —— 场景 B：破墙（核心被墙完全包围，强制 breach）——
+	# —— 场景 B：破墙（2x2 核心被城墙环完全包围，强制 breach）——
 	var g4 := GridModel.new()
 	g4.set_level(3)
 	g4.place(RoomDefs.Type.COMMAND, Vector2i(3, 3))
 	var sim4 := BattleSim.new(g4)
-	for y in range(3, 7):
+	sim4.scrap = 1000  # 确保环能闭合（12 块墙 × 20 = 240）
+	# 4x4 城墙环，把 (3,3)-(4,4) 的 2x2 核心围在正中间
+	for y in range(2, 6):
 		sim4.try_place(RoomDefs.Type.WALL, Vector2i(2, y))
-		sim4.try_place(RoomDefs.Type.WALL, Vector2i(7, y))
-	for x in range(3, 7):
+		sim4.try_place(RoomDefs.Type.WALL, Vector2i(5, y))
+	for x in range(3, 5):
 		sim4.try_place(RoomDefs.Type.WALL, Vector2i(x, 2))
-		sim4.try_place(RoomDefs.Type.WALL, Vector2i(x, 7))
+		sim4.try_place(RoomDefs.Type.WALL, Vector2i(x, 5))
 	var walls_before := _count_type(g4, RoomDefs.Type.WALL)
 	sim4.begin_wave(1)
 	var t2 := 0
@@ -99,6 +101,28 @@ func _init() -> void:
 	_emit(f, "C cost_paid=%d refund=%d after_demo=%d cmd_guard_ok=%s cap_scrap=%d cap_biomass=%d" % [
 		cost_paid, refund, after_demo, "true" if cmd_guard == -1 else "false",
 		sim5.scrap, sim5.biomass])
+
+	# —— 场景 D：可赢性探针（合理布防应能守住第 1 波，核心存活）——
+	var g6 := GridModel.new()
+	g6.set_level(1)
+	g6.place(RoomDefs.Type.COMMAND, Vector2i(2, 2))
+	var sim6 := BattleSim.new(g6)
+	# 用 200 废料造 5 座 1x1 防御塔，环绕 2x2 核心
+	var towers := [Vector2i(0, 4), Vector2i(1, 4), Vector2i(4, 0), Vector2i(4, 1), Vector2i(4, 4)]
+	var placed_towers := 0
+	for c in towers:
+		if sim6.try_place(RoomDefs.Type.DEFENSE, c) >= 0:
+			placed_towers += 1
+	sim6.begin_wave(1)
+	var t3 := 0
+	while sim6.state == "combat" and t3 < 400:
+		sim6.tick()
+		t3 += 1
+	var core_hp_d := -1
+	if sim6.core_id >= 0 and g6.rooms.has(sim6.core_id):
+		core_hp_d = g6.rooms[sim6.core_id]["hp"]
+	_emit(f, "D placed_towers=%d wave=%d state=%s ticks=%d core_hp=%d zombies_left=%d" % [
+		placed_towers, sim6.wave, sim6.state, t3, core_hp_d, sim6.zombies.size()])
 
 	_emit(f, "VALIDATE_OK")
 	f.close()

@@ -23,12 +23,40 @@ var selected_type: int = RoomDefs.Type.DEFENSE
 func _ready() -> void:
 	grid = GridModel.new()
 	grid.set_level(1)
-	var center = Vector2i(grid.size / 2 - 2, grid.size / 2 - 2)
+	# 2x2 指挥核心居中放置（适配新房间尺寸）
+	var center = Vector2i(grid.size / 2 - 1, grid.size / 2 - 1)
 	var cid = grid.place(RoomDefs.Type.COMMAND, center)
 	if cid >= 0:
 		_spawn_room_sprite(cid)
 	sim = BattleSim.new(grid)
+	_setup_camera_and_background()
 	_sync_state()
+
+# 相机居中 + 动态缩放让网格填满窗口；背景 + 网格线让游戏区可见
+func _setup_camera_and_background() -> void:
+	var world_px := grid.size * TILE
+	var bg := ColorRect.new()
+	bg.color = Color(0.13, 0.13, 0.14)
+	bg.position = Vector2.ZERO
+	bg.size = Vector2(world_px, world_px)
+	add_child(bg)
+	move_child(bg, 0)
+
+	var cam := Camera2D.new()
+	cam.anchor_mode = Camera2D.ANCHOR_MODE_FIXED_TOP_LEFT
+	cam.position = Vector2(world_px / 2.0, world_px / 2.0)
+	var vp := get_viewport_rect().size
+	var z: float = min(vp.x, vp.y) / (world_px * 1.1)
+	z = clampf(z, 1.0, 4.0)
+	cam.zoom = Vector2(z, z)
+	add_child(cam)
+
+func _draw() -> void:
+	var world_px := grid.size * TILE
+	var col := Color(0.25, 0.25, 0.27)
+	for i in range(grid.size + 1):
+		draw_line(Vector2(i * TILE, 0), Vector2(i * TILE, world_px), col)
+		draw_line(Vector2(0, i * TILE), Vector2(world_px, i * TILE), col)
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
@@ -92,6 +120,10 @@ func _spawn_room_sprite(id: int) -> void:
 	var s: Vector2i = RoomDefs.size(r["type"])
 	sp.position = Vector2(r["origin"].x * TILE, r["origin"].y * TILE) + Vector2(s.x * TILE / 2, s.y * TILE / 2)
 	sp.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST   # 像素风硬边
+	# 让占位贴图匹配房间格数（避免 4x4 贴图盖到邻居）
+	if sp.texture != null:
+		var tex_size := sp.texture.get_size()
+		sp.scale = Vector2(s.x * TILE / tex_size.x, s.y * TILE / tex_size.y)
 	add_child(sp)
 	room_sprites[id] = sp
 
