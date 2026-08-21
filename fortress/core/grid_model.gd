@@ -11,7 +11,7 @@ var next_id: int = 0
 
 # 堡垒生长曲线（对齐《建造系统 GDD》§5.2）
 func set_level(lv: int) -> void:
-	var table = [6, 8, 10, 12, 14, 16, 18, 18, 18]
+	var table = [6, 8, 10, 13, 15, 18]   # 对齐《建造系统 GDD》§5.2 生长曲线 Lv1–6
 	size = table[min(lv, table.size() - 1)]
 
 func in_bounds(c: Vector2i) -> bool:
@@ -49,3 +49,14 @@ func demolish(id: int) -> void:
 	for c in rooms[id]["cells"]:
 		occupied.erase(c)
 	rooms.erase(id)
+
+# 升级/加固（建造 §3.3：升级不占新格，提升房间等级与承伤 HP）
+# 每调用一次：升级等级 +1，HP 乘以 1.5（取整）。
+func harden(id: int) -> void:
+	if not rooms.has(id):
+		return
+	var r: Dictionary = rooms[id]
+	if not r.has("up"):
+		r["up"] = 0
+	r["up"] = int(r["up"]) + 1
+	r["hp"] = roundi(r["hp"] * 1.5)

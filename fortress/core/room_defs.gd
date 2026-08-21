@@ -19,7 +19,7 @@ static func hp(type: int) -> int:
 		Type.WALL: return 120
 		Type.DEFENSE: return 300
 		Type.PRODUCTION: return 200
-		Type.COMMAND: return 500
+		Type.COMMAND: return 600   # 对齐《波次系统 GDD》§5.3 指挥核心 HP
 	return 100
 
 # 对应像素精灵（美术圣经调色板）
