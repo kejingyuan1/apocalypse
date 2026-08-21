@@ -25,9 +25,25 @@ static func hp(type: int) -> int:
 		Type.COMMAND: return 600   # 对齐《波次系统 GDD》§5.3 指挥核心 HP
 	return 100
 
-# 对应像素精灵（美术圣经调色板）
+# 美术表现：不用拉伸后的低清像素精灵，改用色块 + 符号，保证任意尺寸都清晰可读
+static func color(type: int) -> Color:
+	match type:
+		Type.WALL: return Color(0.45, 0.42, 0.38)       # 石褐
+		Type.DEFENSE: return Color(0.20, 0.58, 0.82)    # 炮塔蓝
+		Type.PRODUCTION: return Color(0.22, 0.70, 0.38) # 生产绿
+		Type.COMMAND: return Color(0.91, 0.57, 0.24)    # 暖橙核心（美术圣经威胁色）
+	return Color(0.5, 0.5, 0.5)
+
+static func symbol(type: int) -> String:
+	match type:
+		Type.WALL: return "墙"
+		Type.DEFENSE: return "防"
+		Type.PRODUCTION: return "产"
+		Type.COMMAND: return "核"
+	return "?"
+
+# 保留旧接口，但 main.gd 优先使用 color/symbol 绘制
 static func texture(type: int) -> Texture2D:
-	# 用 load 替代 preload，避免 headless/首次导入无 .import 时编译期崩溃
 	match type:
 		Type.WALL: return load("res://assets/art/tile_wall.png")
 		Type.DEFENSE: return load("res://assets/art/room_defense.png")
