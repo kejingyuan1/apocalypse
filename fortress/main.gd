@@ -1,12 +1,17 @@
 extends Node2D
-class_name Game
 
 # Phase 4 垂直切片：建造 + 波次最小闭环（build → defend → expand）
 # 渲染/输入翻译层：逻辑全部在 core/（服务端可移植），本脚本只做输入翻译与快照插值渲染。
 
+const RoomDefs := preload("res://core/room_defs.gd")
+const GridModel := preload("res://core/grid_model.gd")
+const BattleSim := preload("res://core/battle_sim.gd")
+const Zombie := preload("res://core/zombie.gd")
+const HUD := preload("res://hud.gd")
+
 const TILE := 32
 
-@onready var hud = $HUD
+@onready var hud: HUD = $HUD
 
 var grid: GridModel
 var sim: BattleSim

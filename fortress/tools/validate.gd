@@ -8,6 +8,12 @@ extends SceneTree
 # 5) 校验 Phase C：拆除返还 / 指挥核心不可拆 / 资源软上限钳制
 # 结果同时 print 到终端（需本地控制台运行）并写入 user://validate_result.txt
 
+# 注意：所有 core 脚本均不使用 class_name，改用显式 preload，避免 .godot/ 缓存缺失时 headless 无法解析。
+const RoomDefs := preload("res://core/room_defs.gd")
+const GridModel := preload("res://core/grid_model.gd")
+const BattleSim := preload("res://core/battle_sim.gd")
+const Zombie := preload("res://core/zombie.gd")
+
 const RESULT := "user://validate_result.txt"
 
 # 显式预编译渲染层脚本（main.gd / hud.gd），确保整工程可构建

@@ -1,5 +1,6 @@
 extends RefCounted
-class_name GridModel
+
+const RoomDefs := preload("res://core/room_defs.gd")
 
 # 网格模型：最大 18x18，初始 6x6（Lv1），随等级扩展
 # 纯逻辑层（无节点依赖），可后续搬到服务端 headless 结算（ADR-002）

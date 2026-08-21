@@ -1,5 +1,4 @@
 extends CanvasLayer
-class_name HUD
 
 # HUD（对齐《美术圣经》单层暖橙威胁色，不用红色；波次 §4.3 三态）
 @onready var label = $Label

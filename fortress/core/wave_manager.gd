@@ -1,5 +1,4 @@
 extends RefCounted
-class_name WaveManager
 
 # 波次调度（对齐《波次系统 GDD》§3.1）
 # 波次规模公式：N(w) = round(8 * 1.12^(w-1))

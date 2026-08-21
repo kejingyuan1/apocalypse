@@ -1,5 +1,9 @@
 extends RefCounted
-class_name BattleSim
+
+const RoomDefs := preload("res://core/room_defs.gd")
+const GridModel := preload("res://core/grid_model.gd")
+const WaveManager := preload("res://core/wave_manager.gd")
+const Zombie := preload("res://core/zombie.gd")
 
 # 战斗内核（服务端权威、纯逻辑层，无节点依赖，可 headless 结算，ADR-002）
 # 固定 1s tick 驱动（ADR-004 确定性：种子化 RNG + 整数化结算）
@@ -109,7 +113,7 @@ func begin_wave(w: int) -> void:
 			k = Zombie.Kind.RUNNER
 		elif i % 7 == 0:
 			k = Zombie.Kind.SPITTER
-		var z := Zombie.make(k, w)
+		var z: Zombie = Zombie.make(k, w) as Zombie
 		z.id = next_id
 		next_id += 1
 		z.pos = _spawn_pos()

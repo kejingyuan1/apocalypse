@@ -1,5 +1,6 @@
 extends RefCounted
-class_name GridCommand
+
+const RoomDefs := preload("res://core/room_defs.gd")
 
 # 玩家放置/移动/升级/拆除指令（对齐《建造系统 GDD》§4 GridCommand）
 enum Action { PLACE, MOVE, UPGRADE, DEMOLISH }

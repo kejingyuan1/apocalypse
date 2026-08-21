@@ -1,7 +1,7 @@
 extends RefCounted
-class_name Zombie
 
 # 丧尸实体（对齐《波次系统 GDD》§3.2 首发三类 + §3.3 / §5.2 公式）
+# 注意：本脚本不使用 class_name；工厂方法通过运行时 load 自身实例化，避免 preload 自引用循环。
 enum Kind { WALKER, RUNNER, SPITTER }
 
 const BASE_SPEED := 20.0       # px/s（Walker 基准，待平衡 pass）
@@ -33,8 +33,9 @@ static func _speed_coef(kind: int) -> float:
 		_: return 1.0
 
 # 按波次公式化生成（对齐波次 §3.3：HP(w)=20×(1+0.15(w−1))×类型系数）
-static func make(kind: int, wave: int) -> Zombie:
-	var z = Zombie.new()
+static func make(kind: int, wave: int) -> RefCounted:
+	var script := load("res://core/zombie.gd")
+	var z: RefCounted = script.new()
 	z.kind = kind
 	z.max_hp = roundi(HP_BASE * (1.0 + HP_GROWTH * (wave - 1)) * _hp_coef(kind))
 	z.hp = z.max_hp
@@ -42,8 +43,9 @@ static func make(kind: int, wave: int) -> Zombie:
 	return z
 
 static func texture(kind: int) -> Texture2D:
+	# 用 load 替代 preload，避免 headless/首次导入无 .import 时编译期崩溃
 	match kind:
-		Kind.WALKER: return preload("res://assets/art/zombie_walker.png")
-		Kind.RUNNER: return preload("res://assets/art/zombie_runner.png")
-		Kind.SPITTER: return preload("res://assets/art/zombie_spitter.png")
-	return preload("res://assets/art/zombie_walker.png")
+		Kind.WALKER: return load("res://assets/art/zombie_walker.png")
+		Kind.RUNNER: return load("res://assets/art/zombie_runner.png")
+		Kind.SPITTER: return load("res://assets/art/zombie_spitter.png")
+	return load("res://assets/art/zombie_walker.png")
