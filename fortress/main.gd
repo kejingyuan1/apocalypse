@@ -101,8 +101,10 @@ var unit_layer: Node2D
 var fx_layer: FXLayer
 var weather_layer: WeatherLayer
 var weather_overlay: WeatherOverlay
-var bg_sprite: Sprite2D
+var bg_canvas: CanvasLayer
+var bg_rect: TextureRect
 var bg_paths: Array = [
+	"res://assets/backgrounds/bg_wasteland_new.png",
 	"res://assets/backgrounds/bg_bunker.png",
 	"res://assets/backgrounds/bg_forest.png",
 	"res://assets/backgrounds/bg_wasteland.png",
@@ -207,11 +209,17 @@ func _cancel_intro() -> void:
 
 # ===================== 背景皮肤 =====================
 func _setup_background() -> void:
-	bg_sprite = Sprite2D.new()
-	bg_sprite.z_as_relative = false
-	bg_sprite.z_index = -10
-	bg_sprite.centered = true
-	add_child(bg_sprite)
+	bg_canvas = CanvasLayer.new()
+	bg_canvas.layer = -100
+	add_child(bg_canvas)
+	bg_rect = TextureRect.new()
+	bg_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	bg_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	bg_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bg_rect.z_as_relative = false
+	bg_rect.z_index = -100
+	bg_canvas.add_child(bg_rect)
 	_set_background(bg_index)
 
 func _set_background(idx: int) -> void:
@@ -219,10 +227,7 @@ func _set_background(idx: int) -> void:
 	var tex := load(bg_paths[bg_index]) as Texture2D
 	if tex == null:
 		return
-	bg_sprite.texture = tex
-	var world_px: float = float(grid.size) * TILE
-	bg_sprite.scale = Vector2(world_px / tex.get_width(), world_px / tex.get_height())
-	bg_sprite.position = _grid_center_world()
+	bg_rect.texture = tex
 
 func _cycle_weather() -> void:
 	var states: Array = ["clear", "rain", "snow"]
@@ -923,7 +928,7 @@ func _dev_shot_setup() -> void:
 	if weather_overlay:
 		weather_overlay.set_weather(target_weather)
 	_sync_state()
-	camera.zoom = Vector2(base_zoom * 3.5, base_zoom * 3.5)
+	camera.zoom = Vector2(base_zoom * 1.0, base_zoom * 1.0)
 	camera.position = _grid_center_world()
 	# 开发截图：给默认基地外加一圈示例城墙（仅用于截图展示），部队从外围下兵
 	var mid := int(BattleSim.BASE_OFFSET + BattleSim.BASE_REGION / 2)
@@ -1072,35 +1077,81 @@ class WeatherOverlay extends CanvasLayer:
 
 	func _draw_watermark_blend() -> void:
 		var vp: Vector2 = watermark_blend.get_viewport_rect().size
-		var band_h: float = 100.0
+		var band_h: float = 260.0
 		var y0: float = vp.y - band_h - BOTTOM_H
 		if y0 < TOP_H:
 			return
-		var alpha: float = 0.18 if weather == "clear" else (0.50 if weather == "rain" else 0.35)
-		var base: Color = Color(0.20, 0.18, 0.16, 1.0)
+		# 新背景图已通过右侧留黑+裁剪去除水印，此层仅保留几乎不可见的底部氛围
+		var alpha: float = 0.03 if weather == "clear" else (0.05 if weather == "rain" else 0.04)
+		var base: Color = Color(0.19, 0.17, 0.15, 1.0)
 		var rng := RandomNumberGenerator.new()
 		rng.seed = 91827
-		# 横向渐变带：中间厚、边缘淡，模拟自然地面污渍
-		var segs: int = 40
+
+		# 横向渐变带：右下角（AI水印位置）更厚重
+		var segs: int = 56
 		for i in range(segs):
 			var t: float = float(i) / (segs - 1)
 			var x: float = t * vp.x
 			var w: float = vp.x / segs + 1.0
-			var falloff: float = max(0.0, 1.0 - abs(t - 0.5) * 2.2)
-			var a: float = alpha * (0.45 + 0.55 * falloff)
+			var center_falloff: float = max(0.0, 1.0 - abs(t - 0.5) * 1.8)
+			var right_bias: float = 0.55 + 0.90 * pow(t, 0.55)
+			var a: float = alpha * (0.30 + 0.70 * center_falloff) * right_bias
 			watermark_blend.draw_rect(Rect2(x, y0, w, band_h), Color(base.r, base.g, base.b, a))
-		# 随机碎石/锈斑纹理
-		for i in range(90):
+
+		# 随机碎石/锈斑/泥土纹理，增强废墟感并打断水印字形
+		for i in range(220):
 			var px: float = rng.randf() * vp.x
 			var py: float = y0 + rng.randf() * band_h
-			var rr: float = 1.5 + rng.randf() * 5.5
+			var rr: float = 1.5 + rng.randf() * 8.0
 			var ca: Color = Color(
-				0.24 + rng.randf() * 0.08,
-				0.21 + rng.randf() * 0.07,
-				0.18 + rng.randf() * 0.06,
-				(0.35 + rng.randf() * 0.35) * alpha
+				0.24 + rng.randf() * 0.09,
+				0.21 + rng.randf() * 0.08,
+				0.18 + rng.randf() * 0.07,
+				(0.45 + rng.randf() * 0.45) * alpha
 			)
 			watermark_blend.draw_circle(Vector2(px, py), rr, ca)
+
+		# 右下角径向强覆盖：中心压住 AI 生成水印，边缘自然淡出
+		var cover_cx: float = vp.x - 60.0
+		var cover_cy: float = vp.y - BOTTOM_H - 70.0
+		var max_r: float = 430.0
+		var rings: int = 50
+		var cover_alpha: float = 0.04 if weather == "clear" else (0.07 if weather == "rain" else 0.06)
+		for i in range(rings, 0, -1):
+			var t: float = float(i) / rings
+			var r: float = max_r * t
+			var a: float = cover_alpha * pow(1.0 - t, 0.65)
+			var shade_r: float = 0.27 + 0.04 * t
+			var shade_g: float = 0.23 + 0.03 * t
+			var shade_b: float = 0.19 + 0.02 * t
+			watermark_blend.draw_circle(Vector2(cover_cx, cover_cy), r, Color(shade_r, shade_g, shade_b, a))
+
+		# 在覆盖区上撒碎石/锈斑，让色块看起来像废墟地面而不是黑补丁
+		for i in range(260):
+			var dx: float = (rng.randf() - 0.35) * max_r
+			var dy: float = (rng.randf() - 0.35) * max_r
+			# 只在右下角半径内
+			if dx * dx + dy * dy > max_r * max_r * 0.55:
+				continue
+			var px: float = cover_cx + dx
+			var py: float = cover_cy + dy
+			var rr: float = 1.5 + rng.randf() * 5.5
+			var ca: Color = Color(
+				0.30 + rng.randf() * 0.12,
+				0.26 + rng.randf() * 0.10,
+				0.22 + rng.randf() * 0.09,
+				0.55 + rng.randf() * 0.35
+			)
+			watermark_blend.draw_circle(Vector2(px, py), rr, ca)
+
+		# 裂缝与焦痕，破坏残留字形
+		for i in range(14):
+			var ang: float = rng.randf() * PI * 0.5  # 右下象限
+			var d1: float = 40 + rng.randf() * (max_r - 80)
+			var d2: float = d1 + (30 + rng.randf() * 90)
+			var p1: Vector2 = Vector2(cover_cx + cos(ang) * d1, cover_cy + sin(ang) * d1)
+			var p2: Vector2 = Vector2(cover_cx + cos(ang) * d2, cover_cy + sin(ang) * d2)
+			watermark_blend.draw_line(p1, p2, Color(0.07, 0.06, 0.05, 0.55 + rng.randf() * 0.25), 1.5 + rng.randf() * 1.5)
 
 # ===================== 内部分层节点 =====================
 class BGLayer extends Node2D:
