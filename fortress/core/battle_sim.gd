@@ -10,7 +10,10 @@ const Zombie := preload("res://core/zombie.gd")
 # 胜负：摧毁敌方指挥核心(胜)；部队全灭且无可部署单位(负)。
 
 const TICK := 1.0
-const GRID_SIZE := 20
+const GRID_SIZE := 120           # 整体战场（含外围部署区）
+const BASE_REGION := 100         # 敌方基地占据区域（居中）
+const BASE_OFFSET := (GRID_SIZE - BASE_REGION) / 2   # = 10
+const WALL_HALF := 20            # 外墙半边长（外墙 40x40）
 const DEFENSE_RANGE_CELLS := 4
 const DEFENSE_DMG := 16
 const UNIT_DMG := 30              # 进攻单位每 tick 对建筑伤害
@@ -28,6 +31,7 @@ var army: Dictionary = {}        # 待部署剩余：kind -> count
 var state: String = "deploy"     # deploy | combat | win | fail
 var core_id: int = -1
 var next_id: int = 0
+var blocked_deploy: Dictionary = {}   # Vector2i -> true：建筑笼罩范围内禁止敌方下兵
 var rng: RandomNumberGenerator
 
 # —— 动画/渲染事件（服务端权威产出，客户端消费做子弹/粒子，不回写逻辑）——
@@ -49,28 +53,53 @@ func _init(g: GridModel) -> void:
 	_build_enemy_base()
 
 # —— 敌方基地生成（COC 式：核心居中 + 城墙闭环 + 防御塔 + 生产房）——
+# 基地占据 BASE_REGION(100) 居中区域；城墙围出多层防御，迫使进攻方破墙。
 func _build_enemy_base() -> void:
-	var s: int = GRID_SIZE
-	var mid: int = int(s / 2)
+	var mid: int = BASE_OFFSET + int(BASE_REGION / 2)   # 60（基地区域中心）
+	# 外墙：40x40 矩形城墙（居中于基地区域），COC 式高血量阻挡
+	var wl: int = mid - WALL_HALF
+	var wh: int = mid + WALL_HALF - 1
+	for x in range(wl, wh + 1):
+		grid.place(RoomDefs.Type.WALL, Vector2i(x, wl))
+		grid.place(RoomDefs.Type.WALL, Vector2i(x, wh))
+	for y in range(wl + 1, wh):
+		grid.place(RoomDefs.Type.WALL, Vector2i(wl, y))
+		grid.place(RoomDefs.Type.WALL, Vector2i(wh, y))
+	# 内墙：核心外再围一圈，形成双层堡垒
+	var il: int = mid - 9
+	var ih: int = mid + 8
+	for x in range(il, ih + 1):
+		grid.place(RoomDefs.Type.WALL, Vector2i(x, il))
+		grid.place(RoomDefs.Type.WALL, Vector2i(x, ih))
+	for y in range(il + 1, ih):
+		grid.place(RoomDefs.Type.WALL, Vector2i(il, y))
+		grid.place(RoomDefs.Type.WALL, Vector2i(ih, y))
 	# 核心 2x2，正中
 	core_id = grid.place(RoomDefs.Type.COMMAND, Vector2i(mid - 1, mid - 1))
-	# 城墙闭环（围出内部空间，迫使进攻方破墙）—— COC 式城墙
-	var lo: int = mid - 5
-	var hi: int = mid + 4
-	for x in range(lo, hi + 1):
-		grid.place(RoomDefs.Type.WALL, Vector2i(x, lo))
-		grid.place(RoomDefs.Type.WALL, Vector2i(x, hi))
-	for y in range(lo + 1, hi):
-		grid.place(RoomDefs.Type.WALL, Vector2i(lo, y))
-		grid.place(RoomDefs.Type.WALL, Vector2i(hi, y))
-	# 内部四角防御塔（保护核心）
-	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid - 4, mid))
-	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid + 3, mid))
-	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid, mid - 4))
-	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid, mid + 3))
-	# 内部生产房（两侧）
-	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid - 4, mid - 4))
-	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid + 1, mid + 1))
+	# 防御塔：外圈四角 + 内圈四角（共 8 座，保护核心与城墙）
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(wl + 3, wl + 3))
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(wh - 3, wl + 3))
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(wl + 3, wh - 3))
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(wh - 3, wh - 3))
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(il + 2, il + 2))
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(ih - 2, il + 2))
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(il + 2, ih - 2))
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(ih - 2, ih - 2))
+	# 生产房：内墙与外墙之间的四边中点
+	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid, wl + 6))
+	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid, wh - 6))
+	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(wl + 6, mid))
+	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(wh - 6, mid))
+	# 标记笼罩范围：每个房间（含城墙）外扩 1 格禁止敌方下兵（COC 式建筑保护范围）
+	_rebuild_deploy_blocked()
+
+func _rebuild_deploy_blocked() -> void:
+	blocked_deploy.clear()
+	for rid in grid.rooms:
+		for c in grid.rooms[rid]["cells"]:
+			for dx in [-1, 0, 1]:
+				for dy in [-1, 0, 1]:
+					blocked_deploy[Vector2i(c.x + dx, c.y + dy)] = true
 
 # —— 玩家下兵：在空白格部署一只指定兵种（进攻方）——
 # 成功返回 true；非法（非部署态/兵力耗尽/越界/占用）返回 false
@@ -82,6 +111,8 @@ func deploy(kind: int, c: Vector2i) -> bool:
 	if not grid.in_bounds(c):
 		return false
 	if grid.occupied.has(c):
+		return false
+	if blocked_deploy.has(c):
 		return false
 	var z: RefCounted = Zombie.make(kind, 1)
 	z.id = next_id

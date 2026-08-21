@@ -1,31 +1,37 @@
-# 末日堡垒 · COC 式进攻玩法重构
+# 末日堡垒 · 动态场景皮肤 + 相机缩放
 
 ## 本次改动
-- **玩法翻转**：从「玩家守城 + 山洞刷怪」改为 **COC 式进攻**：玩家从地图任意空白格下兵，攻打敌方基地。
-- **敌方基地**：20×20 网格中央自动生成核心（2×2）+ COC 式城墙闭环 + 4 座防御塔 + 2 座生产房。
-- **部队**：初始 58 人口（突击兵 36 / 突袭兵 14 / 喷吐者 8）。左键点击空地部署，1/2/3 切换兵种。
-- **胜负**：摧毁橙色核心即获胜；部队全灭且无可部署单位则失败。
-- **寻路**：多源 BFS 以所有建筑为吸引源，进攻单位自动向最近建筑推进；城墙阻挡并需被击破。
-- **数值**：城墙 HP 280→160，进攻单位 HP 60，单次拆墙 30，防御塔每 tick 16 伤害。
-- **HUD**：显示状态（待命/进攻中/胜利/失败）、在场/总兵力、三兵种剩余数量、操作提示。
+- **战场尺度**：120×120 大地图，中央 100×100 敌方基地区域。
+- **动态背景皮肤**：接入 AI 生成的高质量俯视场景图，默认「末日碉堡（废墟城市）」，另有「废墟绿洲」「工业废城」两张变体；按 **B 键**循环切换。
+- **相机缩放/平移**：
+  - 鼠标滚轮上下：以鼠标指针为中心缩放；
+  - 触屏双指捏合：缩放（InputEventMagnifyGesture）；
+  - 右键拖拽：平移视角；
+  - `base_zoom` 随窗口尺寸自适应，乘 `zoom_level` 后限制在 0.02–10.0。
+- **BGLayer 调整**：移除程序化天空/山体/棋盘地面，改为只在 AI 背景图上绘制半透明网格线与核心光晕，保证格子可读又不遮挡美术。
+
+## 新增资源
+| 文件 | 场景 |
+|------|------|
+| `assets/backgrounds/bg_bunker.png` | 默认：城市废墟 + 中央碉堡 |
+| `assets/backgrounds/bg_overgrown.png` | 变体：植被覆盖的废墟公园 |
+| `assets/backgrounds/bg_industrial.png` | 变体：工业废城 + 毒池 |
+
+> 注：AI 生成图右下角带有平台「AI生成」水印；当前接口无参数可彻底去除。如需无水印版本，可换用本地 SD / Midjourney 输出同名文件覆盖。
 
 ## 验证结果
 ```
 VALIDATE_START godot=4.6.3-stable (official) main_ok=true hud_ok=true
-A grid=20 core=1 walls=36 defense=4 prod=2 army=58
+A grid=120 core=1 walls=224 defense=8 prod=4 army=58
 A deployed=58 army_left=0 state=combat
-A end state=win ticks=16 core_hp=-1 units_left=52
-B end state=fail ticks=48 (期望 fail：兵尽)
-C total_shots=41 fire_ok=true
+A end state=win ticks=208 core_hp=-1 units_left=30
+B end state=fail ticks=107 (期望 fail：兵尽)
+C total_shots=137 fire_ok=true
 VALIDATE_OK
 ```
-- 窗口模式 `--shot` 已确认：部队从四周边缘下兵、城墙包围核心、防御塔开火、HUD 状态与兵力正常。
-- **炮筒瞄准修复**：防御塔现在实时指向被攻击者（开火瞬间快速转向；idle 时追踪最近单位）。
+- 窗口模式 `--shot` 已确认：AI 背景铺满战场、网格叠加、中央碉堡/城墙/防御塔清晰可见。
 
 ## 关键文件
-- `core/battle_sim.gd`：敌方基地生成、部队配额与 `deploy()`、COC 式寻路与胜负判定。
-- `core/room_defs.gd`：城墙 HP 调整为 COC 式高血量。
-- `core/zombie.gd`：进攻单位 HP 提升。
-- `main.gd`：输入改为下兵，移除建造/拆除/升级；防御塔实时瞄准最近/被攻击单位。
-- `hud.gd`：改为显示部队与 COC 进攻状态。
-- `tools/validate.gd`：新校验场景（可获胜 / 兵尽失败 / 防御塔开火）。
+- `main.gd`：新增 `bg_sprite`/`bg_paths`/`bg_index`、`_setup_background()`、`_set_background(idx)`、`_zoom_at()`、右键拖拽平移；BGLayer 改为仅绘制网格与核心光晕。
+- `assets/backgrounds/`：3 张 2048×2048 高质量俯视场景图及 `.import`。
+- `project.godot`：无需修改（已有窗口拉伸与最大化）。

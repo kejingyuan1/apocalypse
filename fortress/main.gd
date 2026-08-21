@@ -59,10 +59,22 @@ var selected_kind: int = Zombie.Kind.WALKER
 var tick_acc: float = 0.0
 var camera: Camera2D
 var anim_time: float = 0.0
+var zoom_level: float = 1.0
+var _panning: bool = false
+var _pan_start: Vector2 = Vector2.ZERO
+var _cam_start: Vector2 = Vector2.ZERO
+var base_zoom: float = 1.0
 
 var bg_layer: BGLayer
 var unit_layer: Node2D
 var fx_layer: FXLayer
+var bg_sprite: Sprite2D
+var bg_paths: Array = [
+	"res://assets/backgrounds/bg_bunker.png",
+	"res://assets/backgrounds/bg_overgrown.png",
+	"res://assets/backgrounds/bg_industrial.png",
+]
+var bg_index: int = 0
 
 # —— 动画状态 ——
 var particles: Array = []
@@ -91,6 +103,7 @@ func _ready() -> void:
 	# 战斗内核会自行设定网格尺寸并生成敌方基地
 	sim = BattleSim.new(grid)
 	_setup_camera()
+	_setup_background()
 	_sync_rooms()
 	_sync_state()
 	if OS.get_cmdline_args().has("--shot"):
@@ -117,25 +130,72 @@ func _rezoom() -> void:
 	var world_px: float = float(grid.size) * TILE
 	var avail_w: float = max(vp.x - 32.0, 100.0)
 	var avail_h: float = max(vp.y - HUD_TOP - HUD_BOTTOM, 100.0)
-	var z: float = min(avail_w, avail_h) / world_px
-	z = clampf(z, 0.25, 10.0)
+	base_zoom = clampf(min(avail_w, avail_h) / world_px, 0.02, 10.0)
+	_apply_zoom()
+
+func _apply_zoom() -> void:
+	if camera == null:
+		return
+	var z: float = clampf(base_zoom * zoom_level, 0.02, 10.0)
 	camera.zoom = Vector2(z, z)
 
 func _grid_center_world() -> Vector2:
 	return Vector2(grid.size * TILE / 2.0, grid.size * TILE / 2.0)
 
+# ===================== 背景皮肤 =====================
+func _setup_background() -> void:
+	bg_sprite = Sprite2D.new()
+	bg_sprite.z_as_relative = false
+	bg_sprite.z_index = -10
+	bg_sprite.centered = true
+	add_child(bg_sprite)
+	_set_background(bg_index)
+
+func _set_background(idx: int) -> void:
+	bg_index = idx % bg_paths.size()
+	var tex := load(bg_paths[bg_index]) as Texture2D
+	if tex == null:
+		return
+	bg_sprite.texture = tex
+	var world_px: float = float(grid.size) * TILE
+	bg_sprite.scale = Vector2(world_px / tex.get_width(), world_px / tex.get_height())
+	bg_sprite.position = _grid_center_world()
+
 # ===================== 输入 =====================
 func _input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.pressed:
-		if event.button_index == MOUSE_BUTTON_LEFT:
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			if sim.state == "deploy" or sim.state == "combat":
 				deploy_at(world_to_cell(get_global_mouse_position()))
+		elif event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
+			_zoom_at(get_global_mouse_position(), 1.15)
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
+			_zoom_at(get_global_mouse_position(), 1.0 / 1.15)
+		elif event.button_index == MOUSE_BUTTON_RIGHT:
+			if event.pressed:
+				_panning = true
+				_pan_start = get_global_mouse_position()
+				_cam_start = camera.position
+			else:
+				_panning = false
+	elif event is InputEventMouseMotion and _panning:
+		camera.position = _cam_start - (get_global_mouse_position() - _pan_start) / camera.zoom
+	elif event is InputEventMagnifyGesture:
+		_zoom_at(camera.position, event.factor)
 	elif event is InputEventKey and event.pressed:
 		match event.keycode:
 			KEY_1: selected_kind = Zombie.Kind.WALKER
 			KEY_2: selected_kind = Zombie.Kind.RUNNER
 			KEY_3: selected_kind = Zombie.Kind.SPITTER
+			KEY_B: _set_background(bg_index + 1)
 		_sync_state()
+
+func _zoom_at(world_p: Vector2, factor: float) -> void:
+	var old_z: float = base_zoom * zoom_level
+	zoom_level = clampf(zoom_level * factor, 0.35, 14.0)
+	var new_z: float = base_zoom * zoom_level
+	camera.position = world_p + (camera.position - world_p) * (old_z / new_z)
+	_apply_zoom()
 
 func world_to_cell(p: Vector2) -> Vector2i:
 	return Vector2i(floor(p.x / TILE), floor(p.y / TILE))
@@ -495,23 +555,33 @@ func update_hud() -> void:
 
 # ===================== 开发期截图 =====================
 func _dev_shot_setup() -> void:
-	# 敌方基地由 sim 自动生成；这里在四周空地批量下满部队，并推进若干 tick 制造战斗画面
-	var s: int = grid.size
+	# 敌方基地由 sim 自动生成；在外墙外围一圈下满部队，并推进战斗直到开火/结束
+	var mid := int(BattleSim.BASE_OFFSET + BattleSim.BASE_REGION / 2)
+	var wl := mid - BattleSim.WALL_HALF
+	var wh := mid + BattleSim.WALL_HALF - 1
+	# 包围盒外扩 2 格（笼罩范围=墙外 1 格，故最近合法下兵点是外墙外 2 格）
+	var lo := wl - 2
+	var hi := wh + 2
 	var cells: Array = []
-	for y in [1, 2, s - 2, s - 3]:
-		for x in range(1, s - 1):
-			cells.append(Vector2i(x, y))
+	for x in range(lo, hi + 1):
+		cells.append(Vector2i(x, lo))
+		cells.append(Vector2i(x, hi))
+	for y in range(lo + 1, hi):
+		cells.append(Vector2i(lo, y))
+		cells.append(Vector2i(hi, y))
 	var order := [Zombie.Kind.WALKER, Zombie.Kind.RUNNER, Zombie.Kind.SPITTER]
 	var ci := 0
 	for k in order:
 		while sim.army[k] > 0 and ci < cells.size():
 			if sim.deploy(k, cells[ci]):
 				ci += 1
-	for i in range(10):
+	for i in range(60):
 		sim.tick()
 		_consume_sim_events()
 		_detect_state_changes()
-	_sync_state()
+		_sync_units()
+		if sim.state != "combat":
+			break
 	RenderingServer.viewport_set_update_mode(get_viewport().get_viewport_rid(), RenderingServer.VIEWPORT_UPDATE_ALWAYS)
 	_shot_pending = true
 
@@ -525,48 +595,18 @@ class BGLayer extends Node2D:
 	func _draw_mountain() -> void:
 		var grid: GridModel = main.grid
 		var W := grid.size * TILE
-		var R: float = W * 2.0
-		draw_rect(Rect2(Vector2(-R, -R), Vector2(R * 2.0, R * 2.0)), COLOR_SKY)
-		# 山体边框（凿穿山体建成要塞）
-		var border := TILE * 1.7
-		draw_rect(Rect2(Vector2(-border, -border), Vector2(W + border * 2.0, border)), COLOR_ROCK)
-		draw_rect(Rect2(Vector2(-border, W), Vector2(W + border * 2.0, border)), COLOR_ROCK)
-		draw_rect(Rect2(Vector2(-border, -border), Vector2(border, W + border * 2.0)), COLOR_ROCK)
-		draw_rect(Rect2(Vector2(W, -border), Vector2(border, W + border * 2.0)), COLOR_ROCK)
-		for i in range(40):
-			var rx := -border + _hash(i * 1.7) * (W + border * 2.0)
-			var ry := -border + _hash(i * 3.1 + 5.0) * (W + border * 2.0)
-			var sz := 4.0 + _hash(i * 5.3) * 10.0
-			draw_rect(Rect2(Vector2(rx, ry), Vector2(sz, sz)), COLOR_ROCK_LO if i % 2 == 0 else COLOR_ROCK_HI)
-		for i in range(int(W / (TILE * 1.5)) + 1):
-			var x := i * TILE * 1.5 + _hash(i * 2.2) * 10.0
-			var h := 10.0 + _hash(i * 4.4) * 16.0
-			_fill_poly(_tri(Vector2(x, -border), Vector2(x + 12, -border), Vector2(x + 6, -border + h)), COLOR_ROCK_LO)
-		# 棋盘地面
-		for x in range(grid.size):
-			for y in range(grid.size):
-				var col := COLOR_FLOOR_A if (x + y) % 2 == 0 else COLOR_FLOOR_B
-				draw_rect(Rect2(Vector2(x * TILE, y * TILE), Vector2(TILE, TILE)), col)
-		# 核心光晕
-		var cc := Vector2(grid.size * TILE / 2.0, grid.size * TILE / 2.0)
-		for r in range(6, 0, -1):
-			var a := 0.05 * (r / 6.0)
-			draw_circle(cc, float(r) * TILE * 0.5, Color(0.91, 0.57, 0.24, a))
-		# 网格线
+		# 网格线（叠在 AI 背景图上，保证格子可读）
 		for i in range(grid.size + 1):
-			var col := COLOR_GRID_STRONG if i % 3 == 0 else COLOR_GRID
-			draw_line(Vector2(i * TILE, 0), Vector2(i * TILE, W), col, 1.5 if i % 3 == 0 else 1.0)
-			draw_line(Vector2(0, i * TILE), Vector2(W, i * TILE), col, 1.5 if i % 3 == 0 else 1.0)
-
-	func _fill_poly(pts: PackedVector2Array, col: Color) -> void:
-		draw_polygon(pts, PackedColorArray([col]))
-
-	func _tri(a: Vector2, b: Vector2, c: Vector2) -> PackedVector2Array:
-		return PackedVector2Array([a, b, c])
-
-	func _hash(n: float) -> float:
-		var s := sin(n * 12.9898) * 43758.5453
-		return s - floor(s)
+			var strong: bool = (i % 3 == 0)
+			var col := COLOR_GRID_STRONG if strong else COLOR_GRID
+			var w: float = 1.6 if strong else 1.0
+			draw_line(Vector2(i * TILE, 0), Vector2(i * TILE, W), col, w)
+			draw_line(Vector2(0, i * TILE), Vector2(W, i * TILE), col, w)
+		# 核心光晕（轻微，不遮挡背景细节）
+		var cc := Vector2(grid.size * TILE / 2.0, grid.size * TILE / 2.0)
+		for r in range(4, 0, -1):
+			var a := 0.05 * (r / 4.0)
+			draw_circle(cc, float(r) * TILE * 0.6, Color(0.91, 0.57, 0.24, a))
 
 
 class FXLayer extends Node2D:
