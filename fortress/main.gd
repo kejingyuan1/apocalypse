@@ -100,7 +100,7 @@ var ambient_layer: AmbientLayer
 var unit_layer: Node2D
 var fx_layer: FXLayer
 var weather_layer: WeatherLayer
-var corner_decal: CornerDecalLayer
+var weather_overlay: WeatherOverlay
 var bg_sprite: Sprite2D
 var bg_paths: Array = [
 	"res://assets/backgrounds/bg_bunker.png",
@@ -159,13 +159,10 @@ func _setup_layers() -> void:
 	unit_layer = Node2D.new(); add_child(unit_layer)
 	fx_layer = FXLayer.new(); fx_layer.main = self; add_child(fx_layer)
 	weather_layer = WeatherLayer.new(); weather_layer.main = self; add_child(weather_layer)
-	# 屏幕右下角贴花：遮挡平台水印并增强废墟氛围
-	var decal_canvas := CanvasLayer.new()
-	decal_canvas.layer = 1
-	add_child(decal_canvas)
-	corner_decal = CornerDecalLayer.new()
-	corner_decal.main = self
-	decal_canvas.add_child(corner_decal)
+	# 天气覆盖层：全屏色调遮罩 + 太阳图标/光芒 + 天气文字 + 淡化平台水印
+	weather_overlay = WeatherOverlay.new()
+	weather_overlay.main = self
+	add_child(weather_overlay)
 
 func _setup_camera() -> void:
 	camera = Camera2D.new()
@@ -231,7 +228,10 @@ func _cycle_weather() -> void:
 	var states: Array = ["clear", "rain", "snow"]
 	var idx: int = states.find(weather_layer.weather)
 	idx = (idx + 1) % states.size()
-	weather_layer.set_weather(states[idx])
+	var next: String = states[idx]
+	weather_layer.set_weather(next)
+	if weather_overlay:
+		weather_overlay.set_weather(next)
 	_show_toast("天气：%s" % weather_layer.weather_name(), Color(0.6, 0.85, 1.0))
 
 # ===================== 输入 =====================
@@ -484,6 +484,8 @@ func _process(delta: float) -> void:
 	_sync_units()
 	ambient_layer.update_ambient(delta)
 	weather_layer.update_weather(delta)
+	if weather_overlay:
+		weather_overlay.update(delta)
 	if sim.state == "combat" and game_mode == "attack":
 		tick_acc += delta
 		if tick_acc >= BattleSim.TICK:
@@ -499,7 +501,8 @@ func _process(delta: float) -> void:
 		if _shot_frames == 14:
 			var img := get_viewport().get_texture().get_image()
 			if img:
-				img.save_png("D:/SAFE/apocalypse/fortress/screenshot.png")
+				var shot_weather: String = weather_layer.weather if weather_layer else "rain"
+				img.save_png("D:/SAFE/apocalypse/fortress/screenshot_%s.png" % shot_weather)
 			get_tree().quit()
 
 func _decay(d: Dictionary, delta: float) -> void:
@@ -905,13 +908,20 @@ func _sync_state() -> void:
 
 func update_hud() -> void:
 	if hud:
-		var wn: String = weather_layer.weather_name() if weather_layer else "晴朗"
-		hud.set_state(sim.state, sim.army, sim.units.size(), sim.army_total, selected_kinds, game_mode, editor_selected_type, wn)
+		hud.set_state(sim.state, sim.army, sim.units.size(), sim.army_total, selected_kinds, game_mode, editor_selected_type)
 
 # ===================== 开发期截图 =====================
 func _dev_shot_setup() -> void:
 	_cancel_intro()
-	weather_layer.set_weather("rain")
+	var user_args: PackedStringArray = OS.get_cmdline_user_args()
+	var target_weather: String = "rain"
+	if user_args.has("--weather"):
+		var idx: int = user_args.find("--weather")
+		if idx + 1 < user_args.size():
+			target_weather = user_args[idx + 1]
+	weather_layer.set_weather(target_weather)
+	if weather_overlay:
+		weather_overlay.set_weather(target_weather)
 	_sync_state()
 	camera.zoom = Vector2(base_zoom * 3.5, base_zoom * 3.5)
 	camera.position = _grid_center_world()
@@ -953,66 +963,144 @@ func _dev_shot_setup() -> void:
 	RenderingServer.viewport_set_update_mode(get_viewport().get_viewport_rid(), RenderingServer.VIEWPORT_UPDATE_ALWAYS)
 	_shot_pending = true
 
-# 屏幕右下角废墟贴花：遮挡生成图水印并融入场景
-class CornerDecalLayer extends Control:
+# 天气覆盖层：全屏色调遮罩 + 太阳图标/光芒 + 天气文字 + 淡化平台水印
+class WeatherOverlay extends CanvasLayer:
 	var main: Node
+	var weather: String = "clear"
+	var anim_time: float = 0.0
+
+	var tone_panel: Control
+	var sun: Control
+	var label: Label
+	var watermark_blend: Control
+
+	const TOP_H := 44.0
+	const BOTTOM_H := 92.0
+
+	const TONE := {
+		"clear": Color(1.0, 0.96, 0.86, 0.0),
+		"rain": Color(0.32, 0.38, 0.48, 0.45),
+		"snow": Color(0.76, 0.80, 0.86, 0.32),
+	}
+	const NAMES := {
+		"clear": "晴朗",
+		"rain": "雨天",
+		"snow": "雪天",
+	}
 
 	func _ready() -> void:
-		set_anchors_preset(Control.PRESET_FULL_RECT)
-		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		layer = 2
 
-	func _draw() -> void:
-		var vp: Vector2 = get_viewport_rect().size
-		# 贴花区域：右下角，覆盖常见水印位置
-		var w: float = 420.0
-		var h: float = 160.0
-		var x0: float = vp.x - w
-		var y0: float = vp.y - h
-		# 主暗区：不规则多边形，地面污渍/烧焦痕迹
-		var pts := PackedVector2Array([
-			Vector2(vp.x, vp.y - h * 0.2),
-			Vector2(vp.x, vp.y),
-			Vector2(vp.x - w * 0.85, vp.y),
-			Vector2(vp.x - w, vp.y - h * 0.35),
-			Vector2(vp.x - w * 0.9, vp.y - h * 0.75),
-			Vector2(vp.x - w * 0.45, vp.y - h * 0.95),
-			Vector2(vp.x - w * 0.15, vp.y - h * 0.8),
-		])
-		draw_colored_polygon(pts, Color(0.12, 0.10, 0.09, 0.82))
-		# 内层较亮污渍，增加层次
-		var inner := PackedVector2Array([
-			Vector2(vp.x - 40, vp.y - 40),
-			Vector2(vp.x - 20, vp.y - 100),
-			Vector2(vp.x - 160, vp.y - 120),
-			Vector2(vp.x - 280, vp.y - 90),
-			Vector2(vp.x - 300, vp.y - 30),
-			Vector2(vp.x - 180, vp.y - 20),
-		])
-		draw_colored_polygon(inner, Color(0.18, 0.15, 0.13, 0.55))
-		# 碎石/瓦砾：随机分布的小椭圆
+		tone_panel = Control.new()
+		tone_panel.name = "TonePanel"
+		tone_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+		tone_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		tone_panel.draw.connect(_draw_tone)
+		add_child(tone_panel)
+
+		sun = Control.new()
+		sun.name = "Sun"
+		sun.position = Vector2(16, 56)
+		sun.size = Vector2(80, 80)
+		sun.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		sun.draw.connect(_draw_sun)
+		add_child(sun)
+
+		label = Label.new()
+		label.name = "WeatherLabel"
+		label.position = Vector2(104, 64)
+		label.size = Vector2(160, 28)
+		label.add_theme_font_size_override("font_size", 18)
+		label.add_theme_color_override("font_color", Color(0.98, 0.94, 0.80))
+		label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+		label.add_theme_constant_override("outline_size", 4)
+		add_child(label)
+
+		watermark_blend = Control.new()
+		watermark_blend.name = "WatermarkBlend"
+		watermark_blend.set_anchors_preset(Control.PRESET_FULL_RECT)
+		watermark_blend.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		watermark_blend.draw.connect(_draw_watermark_blend)
+		add_child(watermark_blend)
+
+		set_weather("clear")
+
+	func set_weather(state: String) -> void:
+		weather = state
+		if label:
+			label.text = "天气：%s" % NAMES.get(weather, "未知")
+		if sun:
+			sun.visible = (weather == "clear")
+		_queue_redraw_all()
+
+	func update(delta: float) -> void:
+		anim_time += delta
+		if sun and sun.visible:
+			sun.queue_redraw()
+
+	func _queue_redraw_all() -> void:
+		if tone_panel:
+			tone_panel.queue_redraw()
+		if watermark_blend:
+			watermark_blend.queue_redraw()
+
+	func _draw_tone() -> void:
+		var vp: Vector2 = tone_panel.get_viewport_rect().size
+		var c: Color = TONE.get(weather, Color(1, 1, 1, 0))
+		if c.a > 0.0:
+			# 只覆盖游戏画面区域，避开 HUD 顶栏和底栏
+			tone_panel.draw_rect(Rect2(0, TOP_H, vp.x, max(0.0, vp.y - TOP_H - BOTTOM_H)), c)
+
+	func _draw_sun() -> void:
+		var cx: float = sun.size.x * 0.5
+		var cy: float = sun.size.y * 0.5
+		var r: float = 18.0
+		var rays: int = 12
+		var rot: float = anim_time * 0.4
+		for i in range(rays):
+			var a: float = rot + i * TAU / rays
+			var sa: float = a - 0.07
+			var ea: float = a + 0.07
+			var p1: Vector2 = Vector2(cx, cy) + Vector2(cos(sa), sin(sa)) * (r + 4)
+			var p2: Vector2 = Vector2(cx, cy) + Vector2(cos(ea), sin(ea)) * (r + 4)
+			var p3: Vector2 = Vector2(cx, cy) + Vector2(cos(a), sin(a)) * (r + 24)
+			var pts := PackedVector2Array([p1, p2, p3])
+			sun.draw_colored_polygon(pts, Color(1.0, 0.88, 0.35, 0.30))
+		sun.draw_circle(Vector2(cx, cy), r, Color(1.0, 0.92, 0.45))
+		sun.draw_circle(Vector2(cx, cy), r * 0.7, Color(1.0, 0.96, 0.65))
+		sun.draw_circle(Vector2(cx - 5, cy - 5), r * 0.22, Color(1.0, 1.0, 0.9, 0.65))
+
+	func _draw_watermark_blend() -> void:
+		var vp: Vector2 = watermark_blend.get_viewport_rect().size
+		var band_h: float = 100.0
+		var y0: float = vp.y - band_h - BOTTOM_H
+		if y0 < TOP_H:
+			return
+		var alpha: float = 0.18 if weather == "clear" else (0.50 if weather == "rain" else 0.35)
+		var base: Color = Color(0.20, 0.18, 0.16, 1.0)
 		var rng := RandomNumberGenerator.new()
-		rng.seed = 72631
-		for i: int in range(60):
-			var px: float = x0 + rng.randf() * w
-			var py: float = y0 + rng.randf() * h
-			var rr: float = 2.0 + rng.randf() * 6.0
-			var c: Color = Color(0.22 + rng.randf()*0.08, 0.19 + rng.randf()*0.07, 0.16 + rng.randf()*0.06, 0.55 + rng.randf()*0.25)
-			draw_circle(Vector2(px, py), rr, c)
-		# 裂缝
-		for i: int in range(8):
-			var sx: float = x0 + 30 + rng.randf() * (w - 60)
-			var sy: float = y0 + 20 + rng.randf() * (h - 40)
-			var ex: float = sx + (rng.randf() - 0.5) * 90.0
-			var ey: float = sy + (rng.randf() - 0.5) * 50.0
-			draw_line(Vector2(sx, sy), Vector2(ex, ey), Color(0.05, 0.04, 0.04, 0.5), 1.5)
-		# 废弃轮胎/油桶轮廓（俯视）
-		draw_circle(Vector2(vp.x - 90, vp.y - 75), 22, Color(0.10, 0.09, 0.08, 0.75))
-		draw_circle(Vector2(vp.x - 90, vp.y - 75), 14, Color(0.16, 0.14, 0.12, 0.55))
-		draw_circle(Vector2(vp.x - 150, vp.y - 60), 16, Color(0.10, 0.09, 0.08, 0.70))
-		draw_circle(Vector2(vp.x - 150, vp.y - 60), 9, Color(0.16, 0.14, 0.12, 0.50))
-		# 锈迹斑块
-		draw_circle(Vector2(vp.x - 240, vp.y - 95), 35, Color(0.34, 0.20, 0.14, 0.28))
-		draw_circle(Vector2(vp.x - 320, vp.y - 55), 28, Color(0.30, 0.18, 0.13, 0.22))
+		rng.seed = 91827
+		# 横向渐变带：中间厚、边缘淡，模拟自然地面污渍
+		var segs: int = 40
+		for i in range(segs):
+			var t: float = float(i) / (segs - 1)
+			var x: float = t * vp.x
+			var w: float = vp.x / segs + 1.0
+			var falloff: float = max(0.0, 1.0 - abs(t - 0.5) * 2.2)
+			var a: float = alpha * (0.45 + 0.55 * falloff)
+			watermark_blend.draw_rect(Rect2(x, y0, w, band_h), Color(base.r, base.g, base.b, a))
+		# 随机碎石/锈斑纹理
+		for i in range(90):
+			var px: float = rng.randf() * vp.x
+			var py: float = y0 + rng.randf() * band_h
+			var rr: float = 1.5 + rng.randf() * 5.5
+			var ca: Color = Color(
+				0.24 + rng.randf() * 0.08,
+				0.21 + rng.randf() * 0.07,
+				0.18 + rng.randf() * 0.06,
+				(0.35 + rng.randf() * 0.35) * alpha
+			)
+			watermark_blend.draw_circle(Vector2(px, py), rr, ca)
 
 # ===================== 内部分层节点 =====================
 class BGLayer extends Node2D:
