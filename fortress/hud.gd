@@ -84,6 +84,9 @@ func _layout() -> void:
 	msg_label.size = Vector2(500, 64)
 	if mode_label:
 		mode_label.position = Vector2(16, 48)
+	if weather_label:
+		weather_label.position = Vector2(W - 176, 48)
+		weather_label.size = Vector2(160, 28)
 	if toast_label:
 		toast_label.position = Vector2(W / 2.0 - 200, H - bh - 56)
 		toast_label.size = Vector2(400, 40)
@@ -97,12 +100,15 @@ func _make_label(x: float, y: float, w: float, h: float, font_size: int) -> Labe
 	return lab
 
 var mode_label: Label
+var weather_label: Label
 var toast_label: Label
 var toast_tween: Tween = null
 
 # 初始化时创建模式/提示标签
 func _setup_extra_labels() -> void:
 	mode_label = _make_label(0, 0, 300, 28, 15)
+	weather_label = _make_label(0, 0, 160, 28, 15)
+	weather_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	toast_label = _make_label(0, 0, 400, 40, 18)
 	toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	toast_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -111,7 +117,7 @@ func _setup_extra_labels() -> void:
 	toast_label.hide()
 
 # army: Dictionary(kind -> 剩余数量)；alive: 在场单位数；total: 初始总兵力；selected_kinds: 已选兵种列表
-func set_state(state: String, army: Dictionary, alive: int, total: int, selected_kinds: Array, mode: String = "attack", editor_type: int = 0) -> void:
+func set_state(state: String, army: Dictionary, alive: int, total: int, selected_kinds: Array, mode: String = "attack", editor_type: int = 0, weather_name: String = "晴朗") -> void:
 	if mode_label == null:
 		_setup_extra_labels()
 		_layout()
@@ -119,6 +125,10 @@ func set_state(state: String, army: Dictionary, alive: int, total: int, selected
 	var t: String = "待命" if state == "deploy" else ("进攻中" if state == "combat" else ("胜利" if state == "win" else "失败"))
 	label.text = "状态:%s   |   在场 %d / 总兵力 %d" % [t, alive, total]
 	label.add_theme_color_override("font_color", DANGER_ORANGE)
+
+	if weather_label:
+		weather_label.text = "天气：%s" % weather_name
+		weather_label.add_theme_color_override("font_color", Color(0.75, 0.9, 1.0))
 
 	if mode == "attack":
 		mode_label.text = "[进攻模式]"
@@ -131,7 +141,7 @@ func set_state(state: String, army: Dictionary, alive: int, total: int, selected
 			lab.add_theme_color_override("font_color", COLOR_OK if selected_kinds.has(k) else COLOR_TEXT)
 		match state:
 			"deploy", "combat":
-				tip.text = "拖拽左键连续下兵 | Shift+左键设路径点 | 1/2/3 多选兵种 | C 清路径点 | 滚轮缩放 | 摧毁核心即胜"
+				tip.text = "拖拽左键连续下兵 | Shift+左键设路径点 | 1/2/3 多选兵种 | C 清路径点 | V 切换天气 | 滚轮缩放 | 摧毁核心即胜"
 				if state == "deploy":
 					_show_msg("进攻开始：从四周任意位置下兵！", DANGER_ORANGE)
 			"win":

@@ -38,6 +38,14 @@ const COLOR_UNIT := {
 }
 const COLOR_BULLET := Color(1.0, 0.92, 0.55)
 
+# —— 血条美术 ——
+const HP_BAR_H := 7.0
+const HP_BAR_BORDER := 1.0
+const HP_BAR_SEGMENTS := 4
+const COLOR_HP_BORDER := Color(0.02, 0.02, 0.02, 0.85)
+const COLOR_HP_DARK := Color(0.18, 0.18, 0.18, 0.85)
+const COLOR_HP_FLASH := Color(1.0, 1.0, 1.0, 0.65)
+
 # —— 精灵表配置（AtlasTexture 切片）——
 const ROOM_SHEETS := {
 	RoomDefs.Type.WALL:       {"path": "res://assets/sheets/wall.png",       "anim": "wall",  "frames": 2, "fps": 1.0},
@@ -88,8 +96,10 @@ var _cam_start: Vector2 = Vector2.ZERO
 var base_zoom: float = 1.0
 
 var bg_layer: BGLayer
+var ambient_layer: AmbientLayer
 var unit_layer: Node2D
 var fx_layer: FXLayer
+var weather_layer: WeatherLayer
 var bg_sprite: Sprite2D
 var bg_paths: Array = [
 	"res://assets/backgrounds/bg_bunker.png",
@@ -101,6 +111,8 @@ var bg_index: int = 0
 # —— 动画状态 ——
 var particles: Array = []
 var bullets: Array = []
+var floating_text: Array = []
+var screen_shake: float = 0.0
 var turret_aim: Dictionary = {}
 var turret_targets: Dictionary = {}
 var turret_flash: Dictionary = {}
@@ -124,7 +136,7 @@ var _intro_tween: Tween = null
 func _ready() -> void:
 	_setup_layers()
 	grid = GridModel.new()
-	if OS.get_cmdline_args().has("--editor"):
+	if OS.get_cmdline_user_args().has("--editor"):
 		game_mode = "editor"
 	# 战斗内核会自行设定网格尺寸并生成敌方基地
 	sim = BattleSim.new(grid)
@@ -134,14 +146,18 @@ func _ready() -> void:
 		_try_load_saved_layout()
 	_sync_rooms()
 	_sync_state()
+	ambient_layer.spawn_ambient()
+	weather_layer.set_weather("clear")
 	_intro_camera()
-	if OS.get_cmdline_args().has("--shot"):
+	if OS.get_cmdline_user_args().has("--shot"):
 		_dev_shot_setup()
 
 func _setup_layers() -> void:
 	bg_layer = BGLayer.new(); bg_layer.main = self; add_child(bg_layer)
+	ambient_layer = AmbientLayer.new(); ambient_layer.main = self; add_child(ambient_layer)
 	unit_layer = Node2D.new(); add_child(unit_layer)
 	fx_layer = FXLayer.new(); fx_layer.main = self; add_child(fx_layer)
+	weather_layer = WeatherLayer.new(); weather_layer.main = self; add_child(weather_layer)
 
 func _setup_camera() -> void:
 	camera = Camera2D.new()
@@ -203,6 +219,13 @@ func _set_background(idx: int) -> void:
 	bg_sprite.scale = Vector2(world_px / tex.get_width(), world_px / tex.get_height())
 	bg_sprite.position = _grid_center_world()
 
+func _cycle_weather() -> void:
+	var states: Array = ["clear", "rain", "snow"]
+	var idx: int = states.find(weather_layer.weather)
+	idx = (idx + 1) % states.size()
+	weather_layer.set_weather(states[idx])
+	_show_toast("天气：%s" % weather_layer.weather_name(), Color(0.6, 0.85, 1.0))
+
 # ===================== 输入 =====================
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
@@ -258,6 +281,7 @@ func _input(event: InputEvent) -> void:
 					waypoints.clear()
 					sim.clear_waypoints()
 				KEY_B: _set_background(bg_index + 1)
+				KEY_V: _cycle_weather()
 		else:
 			if EDITOR_ROOM_KEYS.has(event.keycode):
 				editor_selected_type = EDITOR_ROOM_KEYS[event.keycode]
@@ -412,14 +436,26 @@ func _process(delta: float) -> void:
 	waypoint_pulse = fmod(waypoint_pulse + delta * 2.5, TAU)
 	_update_particles(delta)
 	_update_bullets(delta)
+	_update_floating_text(delta)
 	_decay(room_flash, delta)
 	_decay(turret_flash, delta)
 	if core_flash > 0.0:
 		core_flash = max(0.0, core_flash - delta)
+	if screen_shake > 0.0:
+		screen_shake = max(0.0, screen_shake - delta)
+		if camera:
+			var shake_str: float = screen_shake * 8.0
+			camera.offset = Vector2(randf() * shake_str - shake_str * 0.5, randf() * shake_str - shake_str * 0.5)
+		else:
+			screen_shake = 0.0
+	elif camera and camera.offset != Vector2.ZERO:
+		camera.offset = Vector2.ZERO
 
 	_update_turret_aim(delta)
 	_sync_rooms()
 	_sync_units()
+	ambient_layer.update_ambient(delta)
+	weather_layer.update_weather(delta)
 	if sim.state == "combat" and game_mode == "attack":
 		tick_acc += delta
 		if tick_acc >= BattleSim.TICK:
@@ -463,9 +499,21 @@ func _consume_sim_events() -> void:
 			turret_targets[tid] = ev["to"] * TILE
 			if turret_nodes.has(tid):
 				turret_nodes[tid].barrel.play("fire")
-	for ev: Vector2 in sim.hit_events:
-		_spawn_spark(ev * TILE, COLOR_BULLET, 0.25)
-		_spawn_spark(ev * TILE, COLOR_UNIT[Zombie.Kind.WALKER], 0.3)
+			# 炮口火焰与烟雾
+			var muzzle: Vector2 = f + (t - f).normalized() * 28.0
+			_spawn_hit_flash(muzzle, Color(1.0, 0.85, 0.35), 0.18)
+			_spawn_dust(muzzle, Color(0.7, 0.7, 0.65), 0.4)
+	for ev: Dictionary in sim.hit_events:
+		var p: Vector2 = ev["pos"] * TILE
+		var dmg: int = ev.get("dmg", BattleSim.DEFENSE_DMG)
+		_spawn_blood(p, COLOR_HP_RED, 0.35)
+		_spawn_spark(p, COLOR_BULLET, 0.25)
+		_spawn_floating_text(p + Vector2(0, -16), "-%d" % dmg, Color(0.95, 0.35, 0.35))
+	for ev: Dictionary in sim.building_hit_events:
+		var p: Vector2 = ev["pos"] * TILE
+		var dmg: int = ev.get("dmg", BattleSim.UNIT_DMG)
+		_spawn_debris(p, Color(0.55, 0.5, 0.45), 0.35)
+		_spawn_floating_text(p + Vector2(0, -22), "-%d" % dmg, Color(0.95, 0.75, 0.35))
 
 func _detect_state_changes() -> void:
 	var cur: Dictionary = {}
@@ -484,15 +532,18 @@ func _detect_state_changes() -> void:
 		var hp: int = grid.rooms[sim.core_id]["hp"]
 		if prev_core_hp >= 0 and hp < prev_core_hp:
 			core_flash = 0.3
+			screen_shake = 0.25
 			var cc := _room_center_world(grid.rooms[sim.core_id])
-			_spawn_spark(cc, COLOR_HP_RED, 0.4)
+			_spawn_hit_flash(cc, Color(1.0, 0.6, 0.15), 0.45)
+			_spawn_debris(cc, Color(0.5, 0.4, 0.3), 0.5)
 		prev_core_hp = hp
 	for rid: int in grid.rooms:
 		var hp: int = grid.rooms[rid]["hp"]
 		if prev_room_hp.has(rid) and hp < prev_room_hp[rid]:
 			room_flash[rid] = 0.25
 			var rc := _room_center_world(grid.rooms[rid])
-			_spawn_spark(rc, COLOR_ROCK_HI, 0.25)
+			_spawn_debris(rc, Color(0.6, 0.55, 0.5), 0.3)
+			_spawn_dust(rc, Color(0.45, 0.42, 0.38), 0.4)
 		prev_room_hp[rid] = hp
 
 func _update_turret_aim(delta: float) -> void:
@@ -685,6 +736,30 @@ func _spawn_dust(pos: Vector2, col: Color, life: float) -> void:
 			"life": life, "max": life, "col": col, "size": 3.0, "kind": "dust"})
 	_cap_particles()
 
+func _spawn_hit_flash(pos: Vector2, col: Color, life: float) -> void:
+	for i in range(8):
+		var a := randf() * TAU
+		var sp := 60.0 + randf() * 90.0
+		particles.append({"pos": pos, "vel": Vector2(cos(a), sin(a)) * sp,
+			"life": life, "max": life, "col": col, "size": 3.5, "kind": "flash"})
+	_cap_particles()
+
+func _spawn_blood(pos: Vector2, col: Color, life: float) -> void:
+	for i in range(7):
+		var a := randf() * TAU
+		var sp := 25.0 + randf() * 55.0
+		particles.append({"pos": pos, "vel": Vector2(cos(a), sin(a)) * sp,
+			"life": life, "max": life, "col": Color(col.r, col.g, col.b, 0.85), "size": 2.8, "kind": "blood"})
+	_cap_particles()
+
+func _spawn_debris(pos: Vector2, col: Color, life: float) -> void:
+	for i in range(6):
+		var a := randf() * TAU
+		var sp := 30.0 + randf() * 70.0
+		particles.append({"pos": pos, "vel": Vector2(cos(a), sin(a)) * sp,
+			"life": life, "max": life, "col": col, "size": 2.5, "kind": "debris"})
+	_cap_particles()
+
 func _spawn_ring(pos: Vector2, col: Color) -> void:
 	particles.append({"pos": pos, "vel": Vector2.ZERO, "life": 0.4, "max": 0.4,
 		"col": col, "size": TILE * 0.4, "kind": "ring"})
@@ -705,6 +780,14 @@ func _update_particles(delta: float) -> void:
 			p["vel"] *= 0.97
 		elif p["kind"] == "dust":
 			p["vel"] *= 0.95
+		elif p["kind"] == "flash":
+			p["vel"] *= 0.85
+		elif p["kind"] == "blood":
+			p["vel"] *= 0.88
+			p["vel"].y += 60.0 * delta
+		elif p["kind"] == "debris":
+			p["vel"].y += 180.0 * delta
+			p["vel"] *= 0.92
 		alive.append(p)
 	particles = alive
 
@@ -743,6 +826,22 @@ func _update_ambient(delta: float) -> void:
 			"life": 2.0, "max": 2.0, "col": Color(0.6, 0.55, 0.5, 0.25), "size": 1.5, "kind": "dust"})
 	_cap_particles()
 
+func _spawn_floating_text(pos: Vector2, text: String, col: Color) -> void:
+	floating_text.append({"pos": pos, "text": text, "col": col, "life": 1.0, "max": 1.0, "vy": -40.0})
+	if floating_text.size() > 40:
+		floating_text.pop_front()
+
+func _update_floating_text(delta: float) -> void:
+	var alive: Array = []
+	for t: Dictionary in floating_text:
+		t["life"] -= delta
+		if t["life"] <= 0.0:
+			continue
+		t["pos"].y += t["vy"] * delta
+		t["vy"] += 20.0 * delta
+		alive.append(t)
+	floating_text = alive
+
 func _cap_particles() -> void:
 	if particles.size() > 500:
 		particles = particles.slice(particles.size() - 500)
@@ -775,12 +874,16 @@ func _sync_state() -> void:
 
 func update_hud() -> void:
 	if hud:
-		hud.set_state(sim.state, sim.army, sim.units.size(), sim.army_total, selected_kinds, game_mode, editor_selected_type)
+		var wn: String = weather_layer.weather_name() if weather_layer else "晴朗"
+		hud.set_state(sim.state, sim.army, sim.units.size(), sim.army_total, selected_kinds, game_mode, editor_selected_type, wn)
 
 # ===================== 开发期截图 =====================
 func _dev_shot_setup() -> void:
 	_cancel_intro()
-	camera.zoom = Vector2(base_zoom, base_zoom)
+	weather_layer.set_weather("rain")
+	_sync_state()
+	camera.zoom = Vector2(base_zoom * 3.5, base_zoom * 3.5)
+	camera.position = _grid_center_world()
 	# 敌方基地由 sim 自动生成；在外墙外围一圈下满部队，并推进战斗直到开火/结束
 	var mid := int(BattleSim.BASE_OFFSET + BattleSim.BASE_REGION / 2)
 	var wl := mid - BattleSim.WALL_HALF
@@ -846,30 +949,50 @@ class FXLayer extends Node2D:
 		_draw_editor_preview()
 		_draw_bullets()
 		_draw_particles()
+		_draw_floating_text()
 
 	func _draw_hp_bars() -> void:
 		var grid: GridModel = main.grid
 		var sim: BattleSim = main.sim
 		var tick_acc: float = main.tick_acc
+		var room_flash: Dictionary = main.room_flash
 		for id: int in grid.rooms:
 			var r: Dictionary = grid.rooms[id]
 			if r["hp"] < RoomDefs.hp(r["type"]):
-				var origin := Vector2(r["origin"].x * TILE + 2.0, r["origin"].y * TILE - 9.0)
-				_draw_hp_bar(origin, RoomDefs.size(r["type"]).x * TILE - 4.0, r["hp"], RoomDefs.hp(r["type"]))
+				var origin := Vector2(r["origin"].x * TILE + 2.0, r["origin"].y * TILE - 11.0)
+				var flash: float = room_flash.get(id, 0.0)
+				_draw_hp_bar(origin, RoomDefs.size(r["type"]).x * TILE - 4.0, r["hp"], RoomDefs.hp(r["type"]), flash)
 		var zr := TILE * 0.26
 		for z: Zombie in sim.units:
 			if z.hp < z.max_hp:
 				var alpha: float = clamp(tick_acc / BattleSim.TICK, 0.0, 1.0)
 				var p: Vector2 = z.prev_pos.lerp(z.pos, alpha)
 				var wp: Vector2 = p * TILE
-				_draw_hp_bar(wp - Vector2(zr, zr + 12), zr * 2.0, z.hp, z.max_hp)
+				var flash: float = 1.0 if (z.max_hp - z.hp > 0 and z.hp < z.max_hp * 0.25 and int(main.anim_time * 10.0) % 2 == 0) else 0.0
+				_draw_hp_bar(wp - Vector2(zr, zr + 14), zr * 2.0, z.hp, z.max_hp, flash)
 
-	func _draw_hp_bar(origin: Vector2, width: float, hp: int, max_hp: int) -> void:
+	func _draw_hp_bar(origin: Vector2, width: float, hp: int, max_hp: int, flash: float = 0.0) -> void:
 		var ratio := clampf(float(hp) / float(max_hp), 0.0, 1.0)
-		var bar_h := 5.0
-		draw_rect(Rect2(origin, Vector2(width, bar_h)), COLOR_HP_BG)
+		var bar_h := HP_BAR_H
+		var full_rect := Rect2(origin - Vector2(HP_BAR_BORDER, HP_BAR_BORDER),
+			Vector2(width + HP_BAR_BORDER * 2.0, bar_h + HP_BAR_BORDER * 2.0))
+		# 外边框
+		draw_rect(full_rect, COLOR_HP_BORDER)
+		# 暗底
+		draw_rect(Rect2(origin, Vector2(width, bar_h)), COLOR_HP_DARK)
+		# 分段渐变填充
 		var col := COLOR_HP_GREEN if ratio > 0.6 else (COLOR_HP_ORANGE if ratio > 0.3 else COLOR_HP_RED)
-		draw_rect(Rect2(origin, Vector2(width * ratio, bar_h)), col)
+		if flash > 0.0 and int(main.anim_time * 12.0) % 2 == 0:
+			col = COLOR_HP_FLASH
+		var fill_w := width * ratio
+		draw_rect(Rect2(origin, Vector2(fill_w, bar_h)), col)
+		# 分段线
+		var seg_w := width / float(HP_BAR_SEGMENTS)
+		for i: int in range(1, HP_BAR_SEGMENTS):
+			var x := origin.x + seg_w * i
+			draw_line(Vector2(x, origin.y), Vector2(x, origin.y + bar_h), COLOR_HP_BORDER, 1.0)
+		# 高光细线
+		draw_line(origin, origin + Vector2(fill_w, 0), Color(1, 1, 1, 0.4), 1.0)
 
 	func _draw_flashes() -> void:
 		var grid: GridModel = main.grid
@@ -960,5 +1083,198 @@ class FXLayer extends Node2D:
 					draw_arc(p["pos"], rr, 0.0, TAU, 24, col, 2.5)
 				"smoke":
 					draw_circle(p["pos"], p["size"] * (1.6 - life), col)
+				"blood":
+					draw_circle(p["pos"], p["size"] * (0.6 + life * 0.6), col)
+				"debris":
+					var s: float = p["size"] * clamp(life, 0.3, 1.0)
+					draw_rect(Rect2(p["pos"] - Vector2(s, s) * 0.5, Vector2(s, s)), col)
 				_:
 					draw_circle(p["pos"], p["size"] * clamp(life, 0.2, 1.0), col)
+
+	func _draw_floating_text() -> void:
+		var font: Font = ThemeDB.fallback_font
+		for t: Dictionary in main.floating_text:
+			var life: float = t["life"] / t["max"]
+			var col: Color = t["col"]
+			col.a = clamp(life, 0.0, 1.0)
+			var pos: Vector2 = t["pos"]
+			# 粗描边效果：先画黑底字偏移
+			for off: Vector2 in [Vector2(-1, -1), Vector2(1, -1), Vector2(-1, 1), Vector2(1, 1)]:
+				draw_string(font, pos + off, t["text"], HORIZONTAL_ALIGNMENT_CENTER, -1, 18, Color(0, 0, 0, col.a))
+			draw_string(font, pos, t["text"], HORIZONTAL_ALIGNMENT_CENTER, -1, 18, col)
+
+
+# ===================== 环境动态层：游荡僵尸、飞鸟 =====================
+class AmbientLayer extends Node2D:
+	var main: Node
+	var ambient_zombies: Array = []
+	var birds: Array = []
+	const AMBIENT_COUNT := 12
+	const BIRD_COUNT := 8
+	const AVOID_RANGE := 120.0
+
+	func spawn_ambient() -> void:
+		var W: float = float(main.grid.size) * main.TILE
+		for i: int in range(AMBIENT_COUNT):
+			# 主要生成在外围非基地区域
+			var edge: bool = randf() < 0.7
+			var pos: Vector2
+			if edge:
+				var side: int = randi() % 4
+				match side:
+					0: pos = Vector2(randf() * W, randf() * W * 0.15)
+					1: pos = Vector2(randf() * W, W * 0.85 + randf() * W * 0.15)
+					2: pos = Vector2(randf() * W * 0.15, randf() * W)
+					3: pos = Vector2(W * 0.85 + randf() * W * 0.15, randf() * W)
+			else:
+				pos = Vector2(randf() * W, randf() * W)
+			ambient_zombies.append({
+				"pos": pos,
+				"vel": Vector2(randf() * 20.0 - 10.0, randf() * 20.0 - 10.0),
+				"anim": randf() * 10.0,
+				"tint": Color(0.45, 0.55, 0.35, 0.75),
+			})
+		for i: int in range(BIRD_COUNT):
+			var y: float = 80.0 + randf() * (W - 160.0)
+			var dir: float = 1.0 if randf() < 0.5 else -1.0
+			birds.append({
+				"pos": Vector2(-60.0 if dir > 0 else W + 60.0, y),
+				"vel": Vector2(dir * (60.0 + randf() * 40.0), randf() * 10.0 - 5.0),
+				"wing": randf() * TAU,
+			})
+
+	func update_ambient(delta: float) -> void:
+		var W: float = float(main.grid.size) * main.TILE
+		# 环境僵尸：慢速游荡 + 躲避附近战斗单位
+		for z: Dictionary in ambient_zombies:
+			z["anim"] += delta * 3.0
+			# 寻找附近进攻单位并躲避
+			var flee := Vector2.ZERO
+			for u: Zombie in main.sim.units:
+				var up: Vector2 = u.pos * main.TILE
+				var d: Vector2 = up - z["pos"]
+				if d.length() < AVOID_RANGE:
+					flee -= d.normalized() * (AVOID_RANGE - d.length()) * 4.0
+			z["vel"] += flee * delta
+			z["vel"] = z["vel"].limit_length(22.0)
+			z["pos"] += z["vel"] * delta
+			# 边界环绕
+			if z["pos"].x < -40: z["pos"].x = W + 40
+			if z["pos"].x > W + 40: z["pos"].x = -40
+			if z["pos"].y < -40: z["pos"].y = W + 40
+			if z["pos"].y > W + 40: z["pos"].y = -40
+		# 鸟群：直线飞越 + 轻微正弦波动
+		for b: Dictionary in birds:
+			b["wing"] += delta * 12.0
+			b["pos"] += b["vel"] * delta
+			b["pos"].y += sin(b["pos"].x * 0.01 + b["wing"] * 0.3) * 8.0 * delta
+			if b["vel"].x > 0 and b["pos"].x > W + 80:
+				b["pos"].x = -80
+				b["pos"].y = 80.0 + randf() * (W - 160.0)
+			elif b["vel"].x < 0 and b["pos"].x < -80:
+				b["pos"].x = W + 80
+				b["pos"].y = 80.0 + randf() * (W - 160.0)
+		queue_redraw()
+
+	func _draw() -> void:
+		_draw_ambient_zombies()
+		_draw_birds()
+
+	func _draw_ambient_zombies() -> void:
+		for z: Dictionary in ambient_zombies:
+			var pos: Vector2 = z["pos"]
+			var walk: float = sin(z["anim"])
+			var body_off := Vector2(walk * 1.5, 0)
+			var leg1 := Vector2(-3 + walk * 2.0, 8)
+			var leg2 := Vector2(3 - walk * 2.0, 8)
+			var col: Color = z["tint"]
+			# 头
+			draw_circle(pos + Vector2(0, -6), 4.5, col)
+			# 躯干
+			draw_rect(Rect2(pos + Vector2(-4, -2) + body_off, Vector2(8, 10)), col)
+			# 腿
+			draw_line(pos + Vector2(-2, 6), pos + leg1, col, 2.0)
+			draw_line(pos + Vector2(2, 6), pos + leg2, col, 2.0)
+			# 前伸手臂
+			draw_line(pos + Vector2(0, 0), pos + Vector2(6 + walk, 2), col, 2.0)
+
+	func _draw_birds() -> void:
+		for b: Dictionary in birds:
+			var pos: Vector2 = b["pos"]
+			var wing: float = sin(b["wing"]) * 5.0
+			var c: Color = Color(0.2, 0.22, 0.24, 0.85)
+			draw_line(pos + Vector2(-6, -wing), pos, c, 1.5)
+			draw_line(pos + Vector2(6, -wing), pos, c, 1.5)
+			draw_circle(pos, 1.5, c)
+
+
+# ===================== 天气层：雨 / 雪 =====================
+class WeatherLayer extends Node2D:
+	var main: Node
+	var weather: String = "clear"
+	var particles: Array = []
+	var acc: float = 0.0
+	const DENSITY := {
+		"rain": 900,
+		"snow": 500,
+		"clear": 0,
+	}
+	const SPEED := {
+		"rain": Vector2(-120.0, 720.0),
+		"snow": Vector2(-30.0, 90.0),
+	}
+
+	func set_weather(state: String) -> void:
+		weather = state
+		particles.clear()
+		acc = 0.0
+
+	func weather_name() -> String:
+		match weather:
+			"rain": return "雨天"
+			"snow": return "雪天"
+			_: return "晴朗"
+
+	func update_weather(delta: float) -> void:
+		if weather == "clear":
+			particles.clear()
+			return
+		var cam: Camera2D = main.camera
+		if cam == null:
+			return
+		# 在相机视野附近生成粒子
+		var view: Vector2 = get_viewport_rect().size / cam.zoom
+		var center: Vector2 = cam.position
+		var target: int = DENSITY.get(weather, 0)
+		var spawn_rate: float = float(target) * 0.6
+		acc += delta
+		while acc > 0.03 and particles.size() < target:
+			acc -= 0.03
+			var p := Vector2(
+				center.x - view.x * 0.6 + randf() * view.x * 1.2,
+				center.y - view.y * 0.6 + randf() * view.y * 1.2
+			)
+			particles.append({"pos": p, "life": 1.0 + randf() * 0.5})
+		var sp: Vector2 = SPEED.get(weather, Vector2.ZERO)
+		var alive: Array = []
+		for p: Dictionary in particles:
+			p["pos"] += sp * delta
+			p["pos"].x += sin(p["pos"].y * 0.02 + p["life"] * 5.0) * (10.0 if weather == "snow" else 0.0) * delta
+			p["life"] -= delta
+			if p["life"] > 0.0 and p["pos"].y < center.y + view.y * 0.7:
+				alive.append(p)
+		particles = alive
+		queue_redraw()
+
+	func _draw() -> void:
+		match weather:
+			"rain":
+				for p: Dictionary in particles:
+					draw_line(p["pos"], p["pos"] + Vector2(-8, 38), Color(0.9, 0.93, 1.0, 0.88), 2.5)
+					# 雨滴头部高光
+					draw_circle(p["pos"] + Vector2(-8, 38), 1.6, Color(1.0, 1.0, 1.0, 0.55))
+			"snow":
+				for p: Dictionary in particles:
+					var life: float = p["life"]
+					var a: float = clamp(life * 0.8, 0.0, 1.0)
+					draw_circle(p["pos"], 1.6, Color(0.95, 0.97, 1.0, a * 0.7))

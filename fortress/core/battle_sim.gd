@@ -35,8 +35,9 @@ var blocked_deploy: Dictionary = {}   # Vector2i -> true：建筑笼罩范围内
 var rng: RandomNumberGenerator
 
 # —— 动画/渲染事件（服务端权威产出，客户端消费做子弹/粒子，不回写逻辑）——
-var fire_events: Array = []      # 本 tick 防御开火：{from:Vector2(单元), to:Vector2(单元)}
-var hit_events: Array = []       # 本 tick 命中（进攻单位受击）位置 Vector2(单元)
+var fire_events: Array = []      # 本 tick 防御开火：{from:Vector2(单元), to:Vector2(单元), dmg:int}
+var hit_events: Array = []       # 本 tick 命中（进攻单位受击）：{pos:Vector2(单元), dmg:int}
+var building_hit_events: Array = [] # 本 tick 建筑受击：{pos:Vector2(单元), dmg:int}
 var total_shots: int = 0         # 累计开火数（验证用）
 var army_total: int = 0          # 初始总兵力
 var waypoints: Array = []        # Vector2 路径点（单元坐标），部队优先前往
@@ -173,6 +174,7 @@ func tick() -> void:
 		return
 	fire_events.clear()
 	hit_events.clear()
+	building_hit_events.clear()
 	for u in units:
 		u.prev_pos = u.pos
 	var dist: Dictionary = _bfs_dist_to_buildings()
@@ -241,6 +243,7 @@ func _move_unit(u: RefCounted, dist: Dictionary) -> void:
 	if atk_cell != Vector2i(-1, -1):
 		var rid: int = grid.occupied[atk_cell]
 		grid.rooms[rid]["hp"] -= UNIT_DMG
+		building_hit_events.append({"pos": Vector2(atk_cell.x + 0.5, atk_cell.y + 0.5), "dmg": UNIT_DMG})
 		if grid.rooms[rid]["hp"] <= 0:
 			grid.demolish(rid)
 			if rid == core_id:
@@ -312,8 +315,8 @@ func _defense_fire() -> void:
 				target = u
 		if target != null:
 			target.hp -= DEFENSE_DMG
-			fire_events.append({"from": center, "to": target.pos})
-			hit_events.append(target.pos)
+			fire_events.append({"from": center, "to": target.pos, "dmg": DEFENSE_DMG})
+			hit_events.append({"pos": target.pos, "dmg": DEFENSE_DMG})
 			total_shots += 1
 
 func _room_center(r: Dictionary) -> Vector2:
