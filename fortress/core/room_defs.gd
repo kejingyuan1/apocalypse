@@ -19,11 +19,29 @@ static func size(type: int) -> Vector2i:
 # 承伤 HP：城墙为 COC 式高血量阻挡（需破墙），其余对照原设计
 static func hp(type: int) -> int:
 	match type:
-		Type.WALL: return 280      # COC 式城墙：高血量，迫使进攻方破墙
+		Type.WALL: return wall_hp(0)  # 默认 1 级城墙 HP
 		Type.DEFENSE: return 300
 		Type.PRODUCTION: return 200
 		Type.COMMAND: return 600   # 指挥核心 HP
 	return 100
+
+# 城墙等级 HP（COC 式升级：每级大幅提升）
+static func wall_hp(level: int) -> int:
+	match clampi(level, 0, 3):
+		0: return 280
+		1: return 480
+		2: return 820
+		3: return 1400
+	return 280
+
+# 城墙等级颜色（用于编辑器预览、HUD 提示）
+static func wall_color(level: int) -> Color:
+	match clampi(level, 0, 3):
+		0: return Color(0.46, 0.46, 0.49) # 混凝土灰
+		1: return Color(0.51, 0.49, 0.45) # 加固石褐
+		2: return Color(0.43, 0.47, 0.51) # 金属板蓝灰
+		3: return Color(0.57, 0.51, 0.37) # 合金装甲金褐
+	return Color(0.46, 0.46, 0.49)
 
 # 美术表现：不用拉伸后的低清像素精灵，改用色块 + 符号，保证任意尺寸都清晰可读
 static func color(type: int) -> Color:

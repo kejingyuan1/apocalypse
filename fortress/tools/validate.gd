@@ -83,6 +83,36 @@ func _init() -> void:
 		"true" if ok_load else "false", before_count, after_count,
 		"true" if after_core >= 0 else "false"])
 
+	# —— 场景 E：城墙升级 + 等级保存/加载 ——
+	var g4 := GridModel.new()
+	g4.size = BattleSim.GRID_SIZE
+	var w1: int = g4.place(RoomDefs.Type.WALL, Vector2i(55, 55), 0)
+	var w2: int = g4.place(RoomDefs.Type.WALL, Vector2i(56, 55), 0)
+	var hp1_before: int = g4.rooms[w1]["hp"]
+	var up1: bool = g4.upgrade(w1)
+	var up1_again: bool = g4.upgrade(w1)
+	var up1_third: bool = g4.upgrade(w1)
+	var hp1_after: int = g4.rooms[w1]["hp"]
+	var lv1: int = g4.rooms[w1].get("level", 0)
+	var up_max: bool = g4.upgrade(w1)  # Lv3 已满，应失败
+	var layout_v2: Dictionary = BattleSim.new(GridModel.new()).export_layout()
+	# 手动构造含等级的布局
+	layout_v2["rooms"] = [
+		{"type": RoomDefs.Type.WALL, "origin": {"x": 55, "y": 55}, "level": 2},
+		{"type": RoomDefs.Type.WALL, "origin": {"x": 56, "y": 55}, "level": 3},
+		{"type": RoomDefs.Type.COMMAND, "origin": {"x": 58, "y": 58}, "level": 0},
+	]
+	var g5 := GridModel.new()
+	var sim5 := BattleSim.new(g5)
+	var ok_load2: bool = sim5.load_layout(layout_v2)
+	var loaded_levels: Dictionary = {}
+	for id: int in g5.rooms:
+		loaded_levels[g5.rooms[id]["type"]] = g5.rooms[id].get("level", 0)
+	_emit(f, "E upgrade_ok=%s hp_before=%d hp_after=%d level=%d max_fail=%s load_levels_ok=%s" % [
+		"true" if up1 else "false", hp1_before, hp1_after, lv1,
+		"true" if (not up_max) else "false",
+		"true" if (ok_load2 and loaded_levels.get(RoomDefs.Type.WALL, -1) >= 0) else "false"])
+
 	_emit(f, "VALIDATE_OK")
 	f.close()
 	quit()

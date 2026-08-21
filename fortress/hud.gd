@@ -161,7 +161,10 @@ func set_state(state: String, army: Dictionary, alive: int, total: int, selected
 		}
 		for i in range(3):
 			kind_labels[i].text = ""
-		tip.text = "当前：%s | 左键放置 右键/Delete删除 | Ctrl+S保存 Ctrl+L加载 Ctrl+N清空" % type_names.get(editor_type, "?")
+		if editor_type == 0:
+			tip.text = "当前：%s | 左键放置 右键/Delete删除 | U升级城墙 | Ctrl+S保存 Ctrl+L加载 Ctrl+N清空" % type_names.get(editor_type, "?")
+		else:
+			tip.text = "当前：%s | 左键放置 右键/Delete删除 | Ctrl+S保存 Ctrl+L加载 Ctrl+N清空" % type_names.get(editor_type, "?")
 
 func _show_msg(text: String, col: Color) -> void:
 	msg_label.text = text

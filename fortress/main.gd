@@ -48,7 +48,7 @@ const COLOR_HP_FLASH := Color(1.0, 1.0, 1.0, 0.65)
 
 # —— 精灵表配置（AtlasTexture 切片）——
 const ROOM_SHEETS := {
-	RoomDefs.Type.WALL:       {"path": "res://assets/sheets/wall.png",       "anim": "wall",  "frames": 2, "fps": 1.0},
+	RoomDefs.Type.WALL:       {"path": "res://assets/sheets/wall.png",       "anim": "wall",  "frames": 8, "fps": 1.0},
 	RoomDefs.Type.PRODUCTION: {"path": "res://assets/sheets/production.png",  "anim": "work",  "frames": 4, "fps": 5.0},
 	RoomDefs.Type.COMMAND:    {"path": "res://assets/sheets/core.png",        "anim": "pulse", "frames": 4, "fps": 6.0},
 }
@@ -100,6 +100,7 @@ var ambient_layer: AmbientLayer
 var unit_layer: Node2D
 var fx_layer: FXLayer
 var weather_layer: WeatherLayer
+var corner_decal: CornerDecalLayer
 var bg_sprite: Sprite2D
 var bg_paths: Array = [
 	"res://assets/backgrounds/bg_bunker.png",
@@ -158,6 +159,13 @@ func _setup_layers() -> void:
 	unit_layer = Node2D.new(); add_child(unit_layer)
 	fx_layer = FXLayer.new(); fx_layer.main = self; add_child(fx_layer)
 	weather_layer = WeatherLayer.new(); weather_layer.main = self; add_child(weather_layer)
+	# 屏幕右下角贴花：遮挡平台水印并增强废墟氛围
+	var decal_canvas := CanvasLayer.new()
+	decal_canvas.layer = 1
+	add_child(decal_canvas)
+	corner_decal = CornerDecalLayer.new()
+	corner_decal.main = self
+	decal_canvas.add_child(corner_decal)
 
 func _setup_camera() -> void:
 	camera = Camera2D.new()
@@ -293,6 +301,8 @@ func _input(event: InputEvent) -> void:
 				_load_layout()
 			elif event.keycode == KEY_N and event.ctrl_pressed:
 				_editor_clear()
+			elif event.keycode == KEY_U:
+				_editor_upgrade_under_cursor()
 		_sync_state()
 
 func _zoom_at(world_p: Vector2, factor: float) -> void:
@@ -361,6 +371,24 @@ func _editor_place(c: Vector2i) -> void:
 			sim.core_id = id
 		_sync_rooms()
 		fx_layer.queue_redraw()
+
+func _editor_upgrade_under_cursor() -> void:
+	var c: Vector2i = world_to_cell(get_global_mouse_position())
+	if grid.occupied.has(c):
+		var id: int = grid.occupied[c]
+		if grid.rooms[id]["type"] == RoomDefs.Type.WALL:
+			var before_hp: int = grid.rooms[id]["hp"]
+			var ok: bool = sim.upgrade_wall(id)
+			if ok:
+				var lv: int = grid.rooms[id].get("level", 0)
+				var after_hp: int = grid.rooms[id]["hp"]
+				_show_toast("城墙升级 Lv%d (HP %d → %d)" % [lv + 1, before_hp, after_hp], Color(0.95, 0.75, 0.35))
+				_sync_rooms()
+				fx_layer.queue_redraw()
+			else:
+				_show_toast("城墙已满级", Color(0.9, 0.5, 0.3))
+		else:
+			_show_toast("只有城墙可升级", Color(0.9, 0.5, 0.3))
 
 func _editor_remove(c: Vector2i) -> void:
 	if grid.occupied.has(c):
@@ -663,7 +691,8 @@ func _sync_rooms() -> void:
 				turret_nodes[id].pivot.position = center
 				turret_nodes[id].base.position = center
 			var aim: float = float(turret_aim.get(id, 0.0))
-			turret_nodes[id].pivot.rotation = aim
+			# 炮管精灵原图朝上（-y），故 rotation 需在数学角度上补 +PI/2 才能指向目标
+			turret_nodes[id].pivot.rotation = aim + PI / 2.0
 		else:
 			if not room_sprites.has(id):
 				var sp := AnimatedSprite2D.new()
@@ -675,9 +704,11 @@ func _sync_rooms() -> void:
 				room_sprites[id] = sp
 			else:
 				room_sprites[id].position = center
-			if type == RoomDefs.Type.WALL:
-				var ratio := float(r["hp"]) / float(RoomDefs.hp(RoomDefs.Type.WALL))
-				room_sprites[id].frame = 0 if ratio > 0.5 else 1
+		if type == RoomDefs.Type.WALL:
+			var level: int = clampi(r.get("level", 0), 0, 3)
+			var max_hp: int = RoomDefs.wall_hp(level)
+			var ratio := float(r["hp"]) / float(max_hp)
+			room_sprites[id].frame = level * 2 + (0 if ratio > 0.5 else 1)
 
 	for id: int in room_sprites.keys():
 		if not grid.rooms.has(id):
@@ -884,10 +915,18 @@ func _dev_shot_setup() -> void:
 	_sync_state()
 	camera.zoom = Vector2(base_zoom * 3.5, base_zoom * 3.5)
 	camera.position = _grid_center_world()
-	# 敌方基地由 sim 自动生成；在外墙外围一圈下满部队，并推进战斗直到开火/结束
+	# 开发截图：给默认基地外加一圈示例城墙（仅用于截图展示），部队从外围下兵
 	var mid := int(BattleSim.BASE_OFFSET + BattleSim.BASE_REGION / 2)
 	var wl := mid - BattleSim.WALL_HALF
 	var wh := mid + BattleSim.WALL_HALF - 1
+	for x in range(wl, wh + 1):
+		grid.place(RoomDefs.Type.WALL, Vector2i(x, wl), 1)
+		grid.place(RoomDefs.Type.WALL, Vector2i(x, wh), 2)
+	for y in range(wl + 1, wh):
+		grid.place(RoomDefs.Type.WALL, Vector2i(wl, y), 0)
+		grid.place(RoomDefs.Type.WALL, Vector2i(wh, y), 3)
+	sim._rebuild_deploy_blocked()
+	_sync_rooms()
 	# 包围盒外扩 2 格（笼罩范围=墙外 1 格，故最近合法下兵点是外墙外 2 格）
 	var lo := wl - 2
 	var hi := wh + 2
@@ -913,6 +952,67 @@ func _dev_shot_setup() -> void:
 			break
 	RenderingServer.viewport_set_update_mode(get_viewport().get_viewport_rid(), RenderingServer.VIEWPORT_UPDATE_ALWAYS)
 	_shot_pending = true
+
+# 屏幕右下角废墟贴花：遮挡生成图水印并融入场景
+class CornerDecalLayer extends Control:
+	var main: Node
+
+	func _ready() -> void:
+		set_anchors_preset(Control.PRESET_FULL_RECT)
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _draw() -> void:
+		var vp: Vector2 = get_viewport_rect().size
+		# 贴花区域：右下角，覆盖常见水印位置
+		var w: float = 420.0
+		var h: float = 160.0
+		var x0: float = vp.x - w
+		var y0: float = vp.y - h
+		# 主暗区：不规则多边形，地面污渍/烧焦痕迹
+		var pts := PackedVector2Array([
+			Vector2(vp.x, vp.y - h * 0.2),
+			Vector2(vp.x, vp.y),
+			Vector2(vp.x - w * 0.85, vp.y),
+			Vector2(vp.x - w, vp.y - h * 0.35),
+			Vector2(vp.x - w * 0.9, vp.y - h * 0.75),
+			Vector2(vp.x - w * 0.45, vp.y - h * 0.95),
+			Vector2(vp.x - w * 0.15, vp.y - h * 0.8),
+		])
+		draw_colored_polygon(pts, Color(0.12, 0.10, 0.09, 0.82))
+		# 内层较亮污渍，增加层次
+		var inner := PackedVector2Array([
+			Vector2(vp.x - 40, vp.y - 40),
+			Vector2(vp.x - 20, vp.y - 100),
+			Vector2(vp.x - 160, vp.y - 120),
+			Vector2(vp.x - 280, vp.y - 90),
+			Vector2(vp.x - 300, vp.y - 30),
+			Vector2(vp.x - 180, vp.y - 20),
+		])
+		draw_colored_polygon(inner, Color(0.18, 0.15, 0.13, 0.55))
+		# 碎石/瓦砾：随机分布的小椭圆
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 72631
+		for i: int in range(60):
+			var px: float = x0 + rng.randf() * w
+			var py: float = y0 + rng.randf() * h
+			var rr: float = 2.0 + rng.randf() * 6.0
+			var c: Color = Color(0.22 + rng.randf()*0.08, 0.19 + rng.randf()*0.07, 0.16 + rng.randf()*0.06, 0.55 + rng.randf()*0.25)
+			draw_circle(Vector2(px, py), rr, c)
+		# 裂缝
+		for i: int in range(8):
+			var sx: float = x0 + 30 + rng.randf() * (w - 60)
+			var sy: float = y0 + 20 + rng.randf() * (h - 40)
+			var ex: float = sx + (rng.randf() - 0.5) * 90.0
+			var ey: float = sy + (rng.randf() - 0.5) * 50.0
+			draw_line(Vector2(sx, sy), Vector2(ex, ey), Color(0.05, 0.04, 0.04, 0.5), 1.5)
+		# 废弃轮胎/油桶轮廓（俯视）
+		draw_circle(Vector2(vp.x - 90, vp.y - 75), 22, Color(0.10, 0.09, 0.08, 0.75))
+		draw_circle(Vector2(vp.x - 90, vp.y - 75), 14, Color(0.16, 0.14, 0.12, 0.55))
+		draw_circle(Vector2(vp.x - 150, vp.y - 60), 16, Color(0.10, 0.09, 0.08, 0.70))
+		draw_circle(Vector2(vp.x - 150, vp.y - 60), 9, Color(0.16, 0.14, 0.12, 0.50))
+		# 锈迹斑块
+		draw_circle(Vector2(vp.x - 240, vp.y - 95), 35, Color(0.34, 0.20, 0.14, 0.28))
+		draw_circle(Vector2(vp.x - 320, vp.y - 55), 28, Color(0.30, 0.18, 0.13, 0.22))
 
 # ===================== 内部分层节点 =====================
 class BGLayer extends Node2D:
@@ -958,10 +1058,13 @@ class FXLayer extends Node2D:
 		var room_flash: Dictionary = main.room_flash
 		for id: int in grid.rooms:
 			var r: Dictionary = grid.rooms[id]
-			if r["hp"] < RoomDefs.hp(r["type"]):
+			var max_hp: int = RoomDefs.hp(r["type"])
+			if r["type"] == RoomDefs.Type.WALL:
+				max_hp = RoomDefs.wall_hp(r.get("level", 0))
+			if r["hp"] < max_hp:
 				var origin := Vector2(r["origin"].x * TILE + 2.0, r["origin"].y * TILE - 11.0)
 				var flash: float = room_flash.get(id, 0.0)
-				_draw_hp_bar(origin, RoomDefs.size(r["type"]).x * TILE - 4.0, r["hp"], RoomDefs.hp(r["type"]), flash)
+				_draw_hp_bar(origin, RoomDefs.size(r["type"]).x * TILE - 4.0, r["hp"], max_hp, flash)
 		var zr := TILE * 0.26
 		for z: Zombie in sim.units:
 			if z.hp < z.max_hp:
@@ -1064,6 +1167,21 @@ class FXLayer extends Node2D:
 		var theme: Color = RoomDefs.color(main.editor_selected_type)
 		theme.a = 0.35
 		draw_rect(rect, theme)
+		# 悬停显示现有城墙等级/HP
+		if grid.occupied.has(c):
+			var id: int = grid.occupied[c]
+			var r: Dictionary = grid.rooms[id]
+			var lv: int = r.get("level", 0)
+			var txt: String = ""
+			if r["type"] == RoomDefs.Type.WALL:
+				var max_hp: int = RoomDefs.wall_hp(lv)
+				txt = "城墙 Lv%d  HP %d/%d" % [lv + 1, r["hp"], max_hp]
+			else:
+				txt = "%s HP %d/%d" % [RoomDefs.symbol(r["type"]), r["hp"], RoomDefs.hp(r["type"])]
+			var font: Font = ThemeDB.fallback_font
+			var pos := Vector2(c.x * TILE + 4, c.y * TILE - 8)
+			draw_string(font, pos + Vector2(1, 1), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0, 0, 0, 0.8))
+			draw_string(font, pos, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(1, 0.92, 0.75))
 
 	func _draw_bullets() -> void:
 		for b: Dictionary in main.bullets:

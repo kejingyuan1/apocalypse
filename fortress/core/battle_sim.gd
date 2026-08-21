@@ -54,45 +54,23 @@ func _init(g: GridModel) -> void:
 		army_total += ARMY[k]
 	_build_enemy_base()
 
-# —— 敌方基地生成（COC 式：核心居中 + 城墙闭环 + 防御塔 + 生产房）——
-# 基地占据 BASE_REGION(100) 居中区域；城墙围出多层防御，迫使进攻方破墙。
+# —— 敌方基地生成（COC 式：核心 + 防御塔 + 生产房；城墙由玩家在编辑器中自行摆放）——
+# 基地占据 BASE_REGION(100) 居中区域。进攻时若玩家已保存布局则加载，否则使用此默认非城墙布局。
 func _build_enemy_base() -> void:
 	var mid: int = BASE_OFFSET + int(BASE_REGION / 2)   # 60（基地区域中心）
-	# 外墙：40x40 矩形城墙（居中于基地区域），COC 式高血量阻挡
-	var wl: int = mid - WALL_HALF
-	var wh: int = mid + WALL_HALF - 1
-	for x in range(wl, wh + 1):
-		grid.place(RoomDefs.Type.WALL, Vector2i(x, wl))
-		grid.place(RoomDefs.Type.WALL, Vector2i(x, wh))
-	for y in range(wl + 1, wh):
-		grid.place(RoomDefs.Type.WALL, Vector2i(wl, y))
-		grid.place(RoomDefs.Type.WALL, Vector2i(wh, y))
-	# 内墙：核心外再围一圈，形成双层堡垒
-	var il: int = mid - 9
-	var ih: int = mid + 8
-	for x in range(il, ih + 1):
-		grid.place(RoomDefs.Type.WALL, Vector2i(x, il))
-		grid.place(RoomDefs.Type.WALL, Vector2i(x, ih))
-	for y in range(il + 1, ih):
-		grid.place(RoomDefs.Type.WALL, Vector2i(il, y))
-		grid.place(RoomDefs.Type.WALL, Vector2i(ih, y))
 	# 核心 2x2，正中
 	core_id = grid.place(RoomDefs.Type.COMMAND, Vector2i(mid - 1, mid - 1))
-	# 防御塔：外圈四角 + 内圈四角（共 8 座，保护核心与城墙）
-	grid.place(RoomDefs.Type.DEFENSE, Vector2i(wl + 3, wl + 3))
-	grid.place(RoomDefs.Type.DEFENSE, Vector2i(wh - 3, wl + 3))
-	grid.place(RoomDefs.Type.DEFENSE, Vector2i(wl + 3, wh - 3))
-	grid.place(RoomDefs.Type.DEFENSE, Vector2i(wh - 3, wh - 3))
-	grid.place(RoomDefs.Type.DEFENSE, Vector2i(il + 2, il + 2))
-	grid.place(RoomDefs.Type.DEFENSE, Vector2i(ih - 2, il + 2))
-	grid.place(RoomDefs.Type.DEFENSE, Vector2i(il + 2, ih - 2))
-	grid.place(RoomDefs.Type.DEFENSE, Vector2i(ih - 2, ih - 2))
-	# 生产房：内墙与外墙之间的四边中点
-	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid, wl + 6))
-	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid, wh - 6))
-	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(wl + 6, mid))
-	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(wh - 6, mid))
-	# 标记笼罩范围：每个房间（含城墙）外扩 1 格禁止敌方下兵（COC 式建筑保护范围）
+	# 防御塔：核心四角保护
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid - 6, mid - 6))
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid + 5, mid - 6))
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid - 6, mid + 5))
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid + 5, mid + 5))
+	# 生产房：核心四边中点
+	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid - 1, mid - 6))
+	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid - 1, mid + 5))
+	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid - 6, mid - 1))
+	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid + 5, mid - 1))
+	# 标记笼罩范围：每个房间外扩 1 格禁止敌方下兵（COC 式建筑保护范围）
 	_rebuild_deploy_blocked()
 
 # —— 布局导出/加载（基地编辑器 + PVP 保存）——
@@ -100,8 +78,12 @@ func export_layout() -> Dictionary:
 	var rooms: Array = []
 	for id: int in grid.rooms:
 		var r: Dictionary = grid.rooms[id]
-		rooms.append({"type": int(r["type"]), "origin": {"x": int(r["origin"].x), "y": int(r["origin"].y)}})
-	return {"version": 1, "grid_size": grid.size, "rooms": rooms}
+		rooms.append({
+			"type": int(r["type"]),
+			"origin": {"x": int(r["origin"].x), "y": int(r["origin"].y)},
+			"level": r.get("level", 0),
+		})
+	return {"version": 2, "grid_size": grid.size, "rooms": rooms}
 
 func load_layout(layout: Dictionary) -> bool:
 	if not layout.has("rooms"):
@@ -116,11 +98,23 @@ func load_layout(layout: Dictionary) -> bool:
 		var t: int = int(entry["type"])
 		var ox: int = int(entry["origin"]["x"])
 		var oy: int = int(entry["origin"]["y"])
-		var id: int = grid.place(t, Vector2i(ox, oy))
+		var lv: int = entry.get("level", 0)
+		var id: int = grid.place(t, Vector2i(ox, oy), lv)
 		if id >= 0 and t == RoomDefs.Type.COMMAND:
 			core_id = id
 	_rebuild_deploy_blocked()
 	return true
+
+# 升级指定城墙（COC 式）
+func upgrade_wall(id: int) -> bool:
+	if not grid.rooms.has(id):
+		return false
+	if grid.rooms[id]["type"] != RoomDefs.Type.WALL:
+		return false
+	var ok: bool = grid.upgrade(id)
+	if ok:
+		_rebuild_deploy_blocked()
+	return ok
 
 func _rebuild_deploy_blocked() -> void:
 	blocked_deploy.clear()

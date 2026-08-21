@@ -29,7 +29,7 @@ func can_place(type: int, origin: Vector2i) -> bool:
 				return false
 	return true
 
-func place(type: int, origin: Vector2i) -> int:
+func place(type: int, origin: Vector2i, level: int = 0) -> int:
 	if not can_place(type, origin):
 		return -1
 	var s = RoomDefs.size(type)
@@ -39,10 +39,28 @@ func place(type: int, origin: Vector2i) -> int:
 			cells.append(origin + Vector2i(dx, dy))
 	var id = next_id
 	next_id += 1
-	rooms[id] = {"type": type, "origin": origin, "cells": cells, "hp": RoomDefs.hp(type)}
+	var hp: int = RoomDefs.hp(type)
+	if type == RoomDefs.Type.WALL:
+		hp = RoomDefs.wall_hp(level)
+	rooms[id] = {"type": type, "origin": origin, "cells": cells, "hp": hp, "level": level}
 	for c in cells:
 		occupied[c] = id
 	return id
+
+# 升级指定房间（目前仅城墙支持）
+func upgrade(id: int) -> bool:
+	if not rooms.has(id):
+		return false
+	var r: Dictionary = rooms[id]
+	if r["type"] != RoomDefs.Type.WALL:
+		return false
+	var lv: int = r.get("level", 0)
+	if lv >= 3:
+		return false
+	lv += 1
+	r["level"] = lv
+	r["hp"] = RoomDefs.wall_hp(lv)
+	return true
 
 func demolish(id: int) -> void:
 	if not rooms.has(id):

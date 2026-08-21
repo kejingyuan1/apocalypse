@@ -97,47 +97,120 @@ const shade = (c,f)=>C(Math.max(0,Math.min(255,c.r*f)),Math.max(0,Math.min(255,c
 
 // ---------- 实体绘制 ----------
 // 丧尸：朝右行走 4 帧循环。f=0..3
+// 重绘为更生动的末日丧尸：破烂衣物、腐烂细节、发光眼、动态四肢
 function drawZombie(b, f, base, kind) {
   const cx = FRAME/2;
   const p = f/4 * Math.PI*2;
-  const bob = Math.sin(p*2) * 1.6;
-  const step = Math.sin(p) * 5;          // 腿前后
-  const armSwing = Math.sin(p) * 6;
-  // 地面阴影
-  b.ellipse(cx, 58, 16, 5, C(0,0,0,80));
-  // 腿 (两条，交替)
-  b.line(cx-5, 44-bob, cx-5+step, 56, shade(base,0.7), 5);
-  b.line(cx+5, 44-bob, cx+5-step, 56, shade(base,0.85), 5);
-  // 躯干（腐肉，略前倾）
-  b.rrect(cx-11, 26-bob, 22, 20, 6, base);
-  b.rrect(cx-9, 28-bob, 18, 10, 4, shade(base,1.12)); // 高光带
-  // 破洞/暗斑（确定性）
-  b.circle(cx-3, 36-bob, 2.2, shade(base,0.6));
-  b.circle(cx+5, 32-bob, 1.8, shade(base,0.65));
-  // 前伸手臂（丧尸特征：双前臂前伸）
-  b.line(cx+6, 30-bob, cx+15, 34-bob+armSwing*0.3, shade(base,0.8), 4);
-  b.line(cx+6, 36-bob, cx+15, 40-bob-armSwing*0.3, shade(base,0.8), 4);
-  b.circle(cx+15, 34-bob+armSwing*0.3, 2.2, shade(base,0.9));
-  b.circle(cx+15, 40-bob-armSwing*0.3, 2.2, shade(base,0.9));
-  // 头
-  const hy = 16-bob;
-  b.circle(cx, hy, 9, base);
-  b.circle(cx-2, hy-2, 5, shade(base,1.15)); // 顶光
-  // 凹陷眼（黑）+ 红点
-  b.circle(cx+3, hy-1, 2.4, C(10,10,12));
-  b.circle(cx+3, hy-1, 1.1, C(220,40,40));
-  b.circle(cx+7, hy, 2.0, C(10,10,12));
-  // 嘴（黑裂）
-  b.line(cx+2, hy+4, cx+8, hy+5, C(15,10,12), 2);
-  // spitter 额外：背部毒囊
-  if (kind === 'spitter') {
-    b.circle(cx-8, 30-bob, 4, C(150,60,180));
-    b.circle(cx-9, 29-bob, 1.6, C(220,120,255));
-  }
-  // runner 额外：速度残影线
+  const bob = Math.sin(p*2) * 2.2;          // 身体起伏
+  const step = Math.sin(p) * 7;             // 腿部摆动
+  const armSwing = Math.sin(p - 0.6) * 7;   // 手臂滞后摆动
+  const torsoTilt = Math.cos(p*2) * 1.5;    // 躯干扭动
+  // 根据类型调色
+  let skin = base;
+  let shirt = C(60,58,56);
+  let pants = C(45,48,52);
+  let glow = C(220,40,40);
   if (kind === 'runner') {
-    b.line(cx-14, 30-bob, cx-18, 30-bob, C(220,80,70,120), 2);
-    b.line(cx-14, 38-bob, cx-19, 38-bob, C(220,80,70,90), 2);
+    skin = C(200,70,60);
+    shirt = C(140,50,45);
+    pants = C(80,40,38);
+    glow = C(255,80,50);
+  } else if (kind === 'spitter') {
+    skin = C(130,170,90);
+    shirt = C(55,70,50);
+    pants = C(40,50,42);
+    glow = C(160,255,80);
+  }
+  // 地面阴影（更柔和）
+  b.ellipse(cx, 59, 18, 5, C(0,0,0,70));
+  // 后腿（深色）
+  const backLegX = cx - 6 + step * 0.9;
+  const frontLegX = cx + 5 - step * 0.9;
+  // 后腿
+  b.line(cx-6, 42-bob, backLegX, 56, shade(pants,0.7), 6);
+  b.ellipse(backLegX, 57, 5, 3, shade(pants,0.6));
+  // 前腿
+  b.line(cx+5, 42-bob, frontLegX, 56, pants, 6);
+  b.ellipse(frontLegX, 57, 5, 3, shade(pants,0.85));
+  // 躯干（更复杂轮廓：佝偻、前倾）
+  const ty = 28 - bob;
+  const tx = cx + torsoTilt;
+  // 身体主体
+  b.rrect(tx-12, ty-10, 24, 22, 7, shirt);
+  // 破烂衣服下摆
+  b.tri(tx-10, ty+12, tx-4, ty+18, tx+2, ty+12, shade(shirt,0.85));
+  b.tri(tx+4, ty+12, tx+10, ty+17, tx+12, ty+12, shade(shirt,0.8));
+  // 暴露的腐烂皮肤（腹部）
+  b.rrect(tx-7, ty-4, 14, 12, 4, skin);
+  b.circle(tx-3, ty+1, 2.5, shade(skin,0.65));
+  b.circle(tx+4, ty-1, 2.0, shade(skin,0.7));
+  // 肋骨/肌肉线条
+  b.line(tx-5, ty-2, tx-5, ty+6, shade(skin,0.5), 1.5);
+  b.line(tx+1, ty-2, tx+1, ty+6, shade(skin,0.55), 1.5);
+  // 前伸手臂（丧尸特征）
+  const armY1 = ty - 2 + armSwing * 0.25;
+  const armY2 = ty + 6 - armSwing * 0.25;
+  // 上臂
+  b.line(tx+10, ty-2, tx+18, armY1, shade(shirt,0.75), 5);
+  b.line(tx+10, ty+6, tx+18, armY2, shade(shirt,0.7), 5);
+  // 前臂（前伸）
+  b.line(tx+18, armY1, tx+26, armY1 + 2, shade(skin,0.85), 4);
+  b.line(tx+18, armY2, tx+26, armY2 + 2, shade(skin,0.85), 4);
+  // 手爪
+  b.circle(tx+27, armY1 + 2, 3, shade(skin,0.9));
+  b.circle(tx+27, armY2 + 2, 3, shade(skin,0.9));
+  b.line(tx+28, armY1+2, tx+31, armY1+1, C(20,20,20), 1.5);
+  b.line(tx+28, armY2+2, tx+31, armY2+3, C(20,20,20), 1.5);
+  // 头（更大、更有特征）
+  const hy = 8 - bob;
+  const hx = tx + 2;
+  b.circle(hx, hy, 11, skin);
+  // 头发/秃顶
+  b.circle(hx-2, hy-6, 5, C(50,50,48));
+  b.circle(hx+4, hy-5, 4, C(55,55,52));
+  // 顶光
+  b.ellipse(hx-2, hy-5, 6, 3, shade(skin,1.18));
+  // 深陷眼窝 + 发光眼
+  b.circle(hx+4, hy-1, 3.5, C(12,12,14));
+  b.circle(hx+4, hy-1, 1.8, glow);
+  b.circle(hx+8, hy+1, 2.8, C(12,12,14));
+  b.circle(hx+8, hy+1, 1.3, glow);
+  // 鼻子（塌陷）
+  b.circle(hx+7, hy+4, 1.8, shade(skin,0.55));
+  // 嘴（张开）
+  b.ellipse(hx+5, hy+8, 6, 3, C(20,10,10));
+  b.line(hx+3, hy+8, hx+8, hy+9, C(160,40,40), 1.5);
+  // 血迹/污渍
+  b.circle(hx-3, hy+5, 2.2, C(130,30,30,160));
+  b.circle(tx-8, ty+4, 3.0, C(120,30,30,140));
+
+  // spitter 额外：背部毒囊 + 口部酸液
+  if (kind === 'spitter') {
+    const sacPulse = 1.0 + Math.sin(p*2) * 0.25;
+    b.circle(tx-10, ty-2, 6*sacPulse, C(90,160,50));
+    b.circle(tx-11, ty-3, 3*sacPulse, C(140,240,80));
+    b.circle(tx-8, ty+5, 4*sacPulse, C(80,140,45));
+    // 嘴边酸液滴
+    const dripY = (hy+10) + (f%2)*3;
+    b.circle(hx+6, dripY, 2.2, C(160,255,80,200));
+  }
+  // runner 额外：速度残影、更流线姿态
+  if (kind === 'runner') {
+    b.line(cx-16, ty-4, cx-22, ty-6, C(200,60,50,90), 3);
+    b.line(cx-18, ty+4, cx-25, ty+2, C(200,60,50,70), 3);
+    b.line(cx-14, 48-bob, cx-19, 48-bob, C(200,60,50,60), 2);
+    // 更凶狠的眼睛
+    b.circle(hx+4, hy-1, 2.0, C(255,120,60));
+    b.circle(hx+8, hy+1, 1.5, C(255,120,60));
+  }
+  // walker 额外：蹒跚、更破烂
+  if (kind === 'walker') {
+    // 衣服破洞更大
+    b.circle(tx-2, ty+2, 3.5, C(80,75,72));
+    b.circle(tx+6, ty+5, 2.5, C(75,70,68));
+    // 一只手臂下垂更厉害
+    b.line(tx+10, ty+6, tx+20, ty+12, shade(skin,0.8), 4);
+    b.circle(tx+21, ty+13, 2.5, shade(skin,0.9));
   }
 }
 
@@ -218,22 +291,59 @@ function drawProduction(b, f) {
   b.circle(cx-12, cy+2, 2.5, C(80,64,44));
 }
 
-// 墙：混凝土块，frame1 裂纹
-function drawWall(b, cracked) {
+// 墙：4 个等级，每级 2 帧（完好/破损）。level=0..3
+function drawWall(b, frame) {
+  const level = Math.floor(frame / 2);
+  const cracked = (frame % 2) === 1;
   const cx=FRAME/2, cy=FRAME/2;
+  // 各级颜色与材质
+  const palettes = [
+    {base: C(118,118,124), dark: C(86,86,92), seam: C(70,70,76), accent: C(95,95,100)}, // Lv1 混凝土
+    {base: C(130,125,115), dark: C(95,90,82),  seam: C(72,68,62),  accent: C(150,145,135)}, // Lv2 加固石
+    {base: C(110,120,130), dark: C(72,80,88),  seam: C(55,62,70),  accent: C(160,175,190)}, // Lv3 金属板
+    {base: C(145,130,95),  dark: C(105,92,64), seam: C(82,72,52),  accent: C(210,185,120)}, // Lv4 合金装甲
+  ];
+  const pal = palettes[level];
   b.ellipse(cx, 58, 22, 5, C(0,0,0,60));
-  b.rrect(cx-22, cy-22, 44, 44, 4, C(86,86,92));
-  b.rrect(cx-20, cy-20, 40, 40, 3, C(118,118,124));
-  // 砖缝
-  b.line(cx-20, cy, cx+20, cy, C(70,70,76), 2);
-  b.line(cx, cy-20, cx, cy, C(70,70,76), 2);
-  b.line(cx-10, cy-20, cx-10, cy, C(70,70,76),1);
-  b.line(cx+10, cy, cx+10, cy+20, C(70,70,76),1);
+  // 主体
+  b.rrect(cx-23, cy-23, 46, 46, 4, pal.dark);
+  b.rrect(cx-21, cy-21, 42, 42, 3, pal.base);
+  // 材质细节：等级越高越厚重
+  if (level >= 1) {
+    // 加固边框
+    b.rrect(cx-18, cy-18, 36, 36, 2, pal.accent);
+  }
+  if (level >= 2) {
+    // 金属铆钉
+    for (const [bx,by] of [[cx-14,cy-14],[cx+14,cy-14],[cx-14,cy+14],[cx+14,cy+14]]) {
+      b.circle(bx, by, 2.5, C(60,66,72));
+      b.circle(bx, by, 1.2, C(140,150,160));
+    }
+  }
+  if (level >= 3) {
+    // 合金层 + 警示条纹
+    b.rrect(cx-15, cy-15, 30, 30, 2, pal.accent);
+    b.line(cx-12, cy-12, cx+12, cy+12, C(180,160,90), 3);
+    b.line(cx+12, cy-12, cx-12, cy+12, C(180,160,90), 3);
+  }
+  // 砖缝/焊缝
+  b.line(cx-21, cy, cx+21, cy, pal.seam, 2);
+  b.line(cx, cy-21, cx, cy+2, pal.seam, 2);
+  b.line(cx-10, cy-21, cx-10, cy+2, pal.seam, 1);
+  b.line(cx+10, cy, cx+10, cy+21, pal.seam, 1);
+  // 破损裂纹
   if (cracked) {
-    b.line(cx-14, cy-18, cx-4, cy-2, C(40,40,46), 2);
-    b.line(cx-4, cy-2, cx+8, cy+6, C(40,40,46), 2);
-    b.line(cx+8, cy+6, cx+14, cy+18, C(40,40,46), 2);
-    b.line(cx-20, cy+10, cx-8, cy+14, C(40,40,46), 1.5);
+    const crackCol = level >= 3 ? C(60,55,40) : C(45,45,50);
+    b.line(cx-15, cy-19, cx-5, cy-3, crackCol, 2.5);
+    b.line(cx-5, cy-3, cx+9, cy+5, crackCol, 2.5);
+    b.line(cx+9, cy+5, cx+15, cy+19, crackCol, 2.5);
+    b.line(cx-21, cy+11, cx-9, cy+15, crackCol, 2);
+    // 缺口
+    b.circle(cx+14, cy-12, 4, pal.dark);
+  }
+  // 等级徽记（小圆点）
+  for (let i=0;i<=level;i++) {
+    b.circle(cx - 14 + i*7, cy + 16, 2, C(220,200,140));
   }
 }
 
@@ -276,6 +386,6 @@ sheet('turret_base',  1, (b,f)=>drawTurretBase(b));
 sheet('turret_barrel', 4, (b,f)=>drawTurretBarrel(b,f));
 sheet('core', 4, (b,f)=>drawCore(b,f));
 sheet('production', 4, (b,f)=>drawProduction(b,f));
-sheet('wall', 2, (b,f)=>drawWall(b, f===1));
+sheet('wall', 8, (b,f)=>drawWall(b, f));
 sheet('bullet', 1, (b)=>drawBullet(b));
 console.log('完成 ->', OUT);
