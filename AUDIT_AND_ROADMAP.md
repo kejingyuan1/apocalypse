@@ -163,14 +163,36 @@ fortress/
 - **升级仅加固 HP**：GDD §3.3 升级还应增强「产出/防御/供能」；当前切片仅做承伤 HP×1.5（对抗 breach/核心伤害最直接有效），产出/供能增强随对应系统（经济/能源）在 Phase D/E 接入。
 - **`grid_command.gd` 为指令抽象占位**：已实现 `GridCommand`（PLACE/MOVE/UPGRADE/DEMOLISH 枚举 + `place()` 构造），但当前 `BattleSim` 直接以 `try_*` 方法承接（客户端仅发动词指令，服务端权威结算，符合 ADR-002）。`GridCommand` 留作 Phase F 服务器权威迁移时的指令序列化载体，非当前运行路径依赖，不影响构建。
 
+### Phase C 构建修复记录（2026-08-21 追加）
+- **报错现象**：用户 headless 启动时 `main.gd` 大量 `Identifier not declared`（`RoomDefs`/`GridModel`/`BattleSim`/`Zombie`），窗口化运行仅灰屏 + 标题文字。
+- **根因**：
+  1. `.godot/` 缓存缺失时，Godot 4 `class_name` 全局类名在 headless 首次运行无法注册；项目又未提交 `.import` 文件。
+  2. `core/room_defs.gd` 与 `core/zombie.gd` 用 `preload` 引用 PNG，headless 无导入器时直接编译失败。
+  3. `battle_sim.gd` 使用 `WaveManager` 但未显式预加载。
+- **修复**：
+  - 所有 `core/` 脚本及 `main.gd`/`hud.gd` 移除 `class_name`，改用 `const Xxx := preload("res://core/xxx.gd")` 显式引用。
+  - `room_defs.gd`/`zombie.gd` 的纹理函数 `preload` 改为 `load`，让图片加载推迟到运行时，避免 headless 编译期崩溃。
+  - `battle_sim.gd` 添加 `const WaveManager := preload("res://core/wave_manager.gd")`。
+  - `zombie.gd` 工厂方法改用运行时 `load("res://core/zombie.gd")` 自身实例化，避免自引用 preload 循环。
+  - 生成并提交全部 `.import` 文件与 `battle_sim.gd.uid`/`validate.gd.uid`。
+- **结果**：`Godot_v4.6.3-stable_win64_console.exe --headless --script res://tools/validate.gd` 输出 `VALIDATE_OK`。
+
 ### 本地验证（重要）
-- **本沙箱内无法运行 Godot**：执行 `Godot_v4.6.3-stable_win64.exe` 被操作系统级 `拒绝访问`（疑似沙箱 AV/AppLocker 对该二进制拦截；同环境 `ping.exe` 等系统 exe 可正常运行）。因此本环境只能做静态审查，**未做实机运行验证**。
-- **用户本机验证命令**（在仓库 `fortress/` 目录下，用本地 Godot 4.6）：
+- **沙箱内可运行 `Godot_v4.6.3-stable_win64_console.exe`**：之前误报「拒绝访问」是因为使用了外层目录名带 `.exe` 的非控制台二进制；改用 `Godot_v4.6.3-stable_win64_console.exe` 可正常执行 headless 与窗口化命令。本次修复后已在本沙箱实测：
+  ```text
+  VALIDATE_START godot=4.6.3-stable (official) main_ok=true hud_ok=true
+  A spawn=8 wave=1 state=fail ticks=9 zombies_left=5 scrap=120 biomass=50 core_hp=-15
+  DETERMINISTIC=true
+  B walls_before=10 walls_after=10 wave=1 state=fail ticks=12 core_hp=-75
+  C cost_paid=40 refund=20 after_demo=180 cmd_guard_ok=true cap_scrap=500 cap_biomass=300
+  VALIDATE_OK
+  ```
+- **命令**（在仓库 `fortress/` 目录下）：
   ```bash
   # 无头冒烟测试（编译 + 跑通战斗 + 确定性 + breach + Phase C 拆除/升级/软上限）
-  Godot_v4.6.3-stable_win64.exe --headless --path . --script res://tools/validate.gd
+  Godot_v4.6.3-stable_win64_console.exe --headless --path . --script res://tools/validate.gd
   # 实时试玩
-  Godot_v4.6.3-stable_win64.exe --path .
+  Godot_v4.6.3-stable_win64_console.exe --path .
   ```
-  前者会在终端打印 `VALIDATE_OK` 及各场景结果（A/B/DETERMINISTIC/C：含 `cost_paid`/`refund`/`cmd_guard_ok`/`cap_scrap`/`cap_biomass`）；脚本并 `preload` `main.gd`/`hud.gd` 强制渲染层可编译。后者 F5 等价，进 `main.tscn` 即可 建造→空格开波→守→扩张，建造态下右键/X 拆房、U 升级。
-- 静态审查结论：`battle_sim.gd` / `main.gd` / `hud.gd` / `zombie.gd` 均符合 GDScript 2.0 严格类型、纯 `RefCounted` 核心层、`queue_free`/快照插值等规则；场景 `Game→HUD→Label/Tip` 节点链与脚本 `$` 引用一致。建议用户本机跑上述命令做最终确认。
+  前者会在终端打印 `VALIDATE_OK` 及各场景结果；脚本并 `preload` `main.gd`/`hud.gd` 强制渲染层可编译。后者进 `main.tscn` 即可 建造→空格开波→守→扩张，建造态下右键/X 拆房、U 升级。
+- **窗口化渲染已在本沙箱启动验证**：`--path .` 能正常初始化 OpenGL (Intel Iris Xe) 并进入窗口，因无截图工具未留存像素级截图，但脚本逻辑层已通过无头验证。
