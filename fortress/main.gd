@@ -68,6 +68,7 @@ var fx_layer: FXLayer
 var particles: Array = []
 var bullets: Array = []
 var turret_aim: Dictionary = {}
+var turret_targets: Dictionary = {}
 var turret_flash: Dictionary = {}
 var room_flash: Dictionary = {}
 var core_flash: float = 0.0
@@ -156,7 +157,7 @@ func _process(delta: float) -> void:
 	if core_flash > 0.0:
 		core_flash = max(0.0, core_flash - delta)
 
-	_update_turret_idle(delta)
+	_update_turret_aim(delta)
 	_sync_rooms()
 	_sync_units()
 	if sim.state == "combat":
@@ -199,6 +200,7 @@ func _consume_sim_events() -> void:
 				bd = dd; tid = rid
 		if tid >= 0:
 			turret_flash[tid] = 0.12
+			turret_targets[tid] = ev["to"] * TILE
 			if room_sprites.has(tid):
 				room_sprites[tid].play("fire")
 	for ev: Vector2 in sim.hit_events:
@@ -233,16 +235,43 @@ func _detect_state_changes() -> void:
 			_spawn_spark(rc, COLOR_ROCK_HI, 0.25)
 		prev_room_hp[rid] = hp
 
-func _update_turret_idle(delta: float) -> void:
+func _update_turret_aim(delta: float) -> void:
 	for rid: int in grid.rooms:
 		if grid.rooms[rid]["type"] != RoomDefs.Type.DEFENSE:
 			continue
 		var rc := _room_center_world(grid.rooms[rid])
-		var target := _angle_to_core(rc)
-		if not turret_aim.has(rid):
-			turret_aim[rid] = target
+		var target_angle: float
+		if turret_targets.has(rid):
+			# 刚开火：立即指向被攻击者，随后逐渐遗忘该目标回归最近单位
+			target_angle = (turret_targets[rid] - rc).angle()
 		else:
-			turret_aim[rid] = _lerp_angle(turret_aim[rid], target + sin(anim_time + rid) * 0.4, 0.05)
+			# 未开火：瞄准最近进攻单位
+			var nearest: Vector2 = _nearest_unit_pos(rc)
+			if nearest.distance_squared_to(rc) < INF * 0.5:
+				target_angle = (nearest - rc).angle()
+			else:
+				target_angle = _angle_to_core(rc)
+		if not turret_aim.has(rid):
+			turret_aim[rid] = target_angle
+		else:
+			# 开火后前 0.2s 快速转向；之后慢速 idle 扫描
+			var speed: float = 8.0 if turret_flash.has(rid) else 2.5
+			turret_aim[rid] = _lerp_angle(turret_aim[rid], target_angle, speed * delta)
+	# 清理过期目标记忆（保留 0.25s 后回归最近单位瞄准）
+	for rid: int in turret_targets.keys():
+		if not turret_flash.has(rid):
+			turret_targets.erase(rid)
+
+func _nearest_unit_pos(from: Vector2) -> Vector2:
+	var best: float = INF
+	var pos: Vector2 = Vector2.INF
+	var alpha: float = clamp(tick_acc / BattleSim.TICK, 0.0, 1.0)
+	for z: Zombie in sim.units:
+		var p: Vector2 = z.prev_pos.lerp(z.pos, alpha) * TILE
+		var d := from.distance_squared_to(p)
+		if d < best:
+			best = d; pos = p
+	return pos
 
 # ===================== 精灵同步 =====================
 func _make_frames(path: String, anim: String, frame_count: int, fps: float, loop: bool) -> SpriteFrames:
@@ -318,7 +347,7 @@ func _sync_rooms() -> void:
 		sp.position = _room_center_world(r)
 		match r["type"]:
 			RoomDefs.Type.DEFENSE:
-				sp.rotation = float(turret_aim.get(id, 0.0)) + PI / 2.0
+				sp.rotation = float(turret_aim.get(id, 0.0))
 			RoomDefs.Type.WALL:
 				var ratio := float(r["hp"]) / float(RoomDefs.hp(RoomDefs.Type.WALL))
 				sp.frame = 0 if ratio > 0.5 else 1

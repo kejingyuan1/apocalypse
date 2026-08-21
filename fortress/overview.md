@@ -20,11 +20,12 @@ C total_shots=41 fire_ok=true
 VALIDATE_OK
 ```
 - 窗口模式 `--shot` 已确认：部队从四周边缘下兵、城墙包围核心、防御塔开火、HUD 状态与兵力正常。
+- **炮筒瞄准修复**：防御塔现在实时指向被攻击者（开火瞬间快速转向；idle 时追踪最近单位）。
 
 ## 关键文件
 - `core/battle_sim.gd`：敌方基地生成、部队配额与 `deploy()`、COC 式寻路与胜负判定。
 - `core/room_defs.gd`：城墙 HP 调整为 COC 式高血量。
 - `core/zombie.gd`：进攻单位 HP 提升。
-- `main.gd`：输入改为下兵，移除建造/拆除/升级，单位渲染与特效保留。
+- `main.gd`：输入改为下兵，移除建造/拆除/升级；防御塔实时瞄准最近/被攻击单位。
 - `hud.gd`：改为显示部队与 COC 进攻状态。
 - `tools/validate.gd`：新校验场景（可获胜 / 兵尽失败 / 防御塔开火）。
