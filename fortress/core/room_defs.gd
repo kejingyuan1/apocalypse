@@ -25,8 +25,8 @@ static func hp(type: int) -> int:
 # 对应像素精灵（美术圣经调色板）
 static func texture(type: int) -> Texture2D:
 	match type:
-		Type.WALL: return preload("res://assets/sprites/tile_wall.png")
-		Type.DEFENSE: return preload("res://assets/sprites/room_defense.png")
-		Type.PRODUCTION: return preload("res://assets/sprites/room_production.png")
-		Type.COMMAND: return preload("res://assets/sprites/room_command.png")
-	return preload("res://assets/sprites/tile_wall.png")
+		Type.WALL: return preload("res://assets/art/tile_wall.png")
+		Type.DEFENSE: return preload("res://assets/art/room_defense.png")
+		Type.PRODUCTION: return preload("res://assets/art/room_production.png")
+		Type.COMMAND: return preload("res://assets/art/room_command.png")
+	return preload("res://assets/art/tile_wall.png")

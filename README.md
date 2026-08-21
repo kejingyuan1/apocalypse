@@ -87,15 +87,26 @@ apocalypse/
 ---
 
 ## 4. 像素美术资产
-- 全部精灵由 `assets/gen_sprites.py`（Python PIL）按**美术圣经调色板**生成，32×32，可复现。
-- 已生成：地面/城墙/防御/生产/指挥 房间图，Walker/Runner/Spitter 丧尸图，威胁⚠/能源/晶体 图标。
-- 预览见 `assets/sprites_preview.png`。
-- 注：当前为**程序化占位像素图**，正式发行前由美术（art-director）产出高保真手绘像素集替换同名文件即可，路径不变。
+- **当前为 AI 生成的像素风美术**（ImageGen 工具产出 512×512 原图，再由 `assets/downscale_ai.py` 降采样为 32×32 游戏精灵）。
+- 原图（高分辨率源）：`assets/ai/<name>/*.png`（11 张，512×512，可二次加工）。
+- 游戏精灵：`assets/art/*.png`（11 张，32×32，Lanczos 降采样 + 自适应调色板量化，保留硬边与识别度）。
+  - 地面 `tile_ground` / 城墙 `tile_wall` / 防御 `room_defense` / 生产 `room_production` / 指挥 `room_command`
+  - 丧尸 `zombie_walker` / `zombie_runner` / `zombie_spitter`
+  - 图标 `icon_threat`（威胁⚠）/ `icon_energy`（能源）/ `icon_crystal`（晶体）
+- 游戏代码精灵引用集中在 `core/room_defs.gd`、`core/zombie.gd`（9 处 `preload("res://assets/art/...")`），新增精灵只需放 `assets/art/` 并改对应 preload。
+- 预览拼接图（4× 放大）：`assets/art_preview.png`。
+- ⚠️ **已知短板：当前精灵是静态单帧图，无动画。** 动图/帧动画列为后续待办（见 §5）。
+- 历史占位图：`assets/sprites/`（早期 PIL 程序化方块图，已被 `assets/art/` 取代，已移出版本库，仅本地残留）。
 
 ---
 
 ## 5. 下一步
 - [ ] Phase 4 打磨：破墙/防御开火/资源消耗接入 `_tick()`（逻辑已在 GDD 定义）
 - [ ] Phase 5 制作：按冲刺实现 能源/经济/科技/PVP 系统
-- [ ] 美术：手绘像素集替换占位图、动画帧、特效
+- [ ] **美术：精灵动画化（重点待办）** —— 当前 `assets/art/*.png` 均为**静态单帧图，不会动**。需产出类 GIF/APNG 的帧动画或精灵表（sprite sheet），覆盖 idle / walk / attack 等状态：
+  - 丧尸 Walker/Runner/Spitter：行走循环帧、攻击帧
+  - 房间 防御/生产/指挥：idle 微动、被击/开火特效帧
+  - 图标 威胁/能源/晶体：脉冲/流动循环帧
+  - 实现方式：`AnimatedSprite2D` + 精灵表，或 `assets/downscale_ai.py` 扩展为批量降采样多帧
+- [ ] 美术：动画帧接入后，补充命中特效、波次预警动效
 - [ ] 网络：core/ 逻辑迁移到服务器权威 headless 服务（ADR-002）

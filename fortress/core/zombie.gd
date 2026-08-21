@@ -26,7 +26,7 @@ static func make(kind: int) -> Zombie:
 
 static func texture(kind: int) -> Texture2D:
 	match kind:
-		Kind.WALKER: return preload("res://assets/sprites/zombie_walker.png")
-		Kind.RUNNER: return preload("res://assets/sprites/zombie_runner.png")
-		Kind.SPITTER: return preload("res://assets/sprites/zombie_spitter.png")
-	return preload("res://assets/sprites/zombie_walker.png")
+		Kind.WALKER: return preload("res://assets/art/zombie_walker.png")
+		Kind.RUNNER: return preload("res://assets/art/zombie_runner.png")
+		Kind.SPITTER: return preload("res://assets/art/zombie_spitter.png")
+	return preload("res://assets/art/zombie_walker.png")
