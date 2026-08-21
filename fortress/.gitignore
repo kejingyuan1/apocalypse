@@ -1,0 +1,11 @@
+# Godot 4 导入缓存（不入库）
+.godot/
+
+# 系统 / 临时
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Python 缓存（像素图生成脚本的副产品）
+__pycache__/
+*.pyc

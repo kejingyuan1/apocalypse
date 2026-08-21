@@ -1,0 +1,12 @@
+; Engine configuration file.
+; Godot 4 project — Apocalypse Fortress (末日堡垒) Phase 4 vertical slice
+config_version=5
+
+[application]
+config/name="Apocalypse Fortress"
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.6", "GL Compatibility")
+config/icon="res://icon.svg"
+
+[rendering]
+renderer/rendering_method="gl_compatibility"
