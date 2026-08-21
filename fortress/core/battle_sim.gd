@@ -2,149 +2,103 @@ extends RefCounted
 
 const RoomDefs := preload("res://core/room_defs.gd")
 const GridModel := preload("res://core/grid_model.gd")
-const WaveManager := preload("res://core/wave_manager.gd")
 const Zombie := preload("res://core/zombie.gd")
 
-# 战斗内核（服务端权威、纯逻辑层，无节点依赖，可 headless 结算，ADR-002）
-# 固定 1s tick 驱动（ADR-004 确定性：种子化 RNG + 整数化结算）
-# 负责：寻路/BFS、破墙(breach)、防御房自动开火、波次消耗结算、胜负判定
-#
-# 坐标约定：丧尸 pos 以"单元坐标"表示（cell-center 基，即 cell(cx,cy) 中心 = (cx+0.5, cy+0.5)）。
-# 渲染层（main.gd）按 TICK 间隔对 prev_pos→pos 做插值，消费本核快照（快照插值模式）。
+# 末日堡垒 · COC 式进攻玩法（服务端权威逻辑层，ADR-002）
+# 玩家带一支部队，从地图任意空白格下兵，攻打敌方基地。
+# 敌方基地 = 房间(建筑) + COC 式城墙(高血量阻挡) + 自动开火的防御塔。
+# 胜负：摧毁敌方指挥核心(胜)；部队全灭且无可部署单位(负)。
 
 const TICK := 1.0
-const SPAWN_MARGIN := 2          # 战场环带宽度（限定 BFS 边界，防无限扩散）
+const GRID_SIZE := 20
+const DEFENSE_RANGE_CELLS := 4
+const DEFENSE_DMG := 16
+const UNIT_DMG := 30              # 进攻单位每 tick 对建筑伤害
 
-# —— 战斗数值（设计提案·待平衡 pass，对齐波次 §3.4 / §5.3 / §5.4；GDD 标注待复核）——
-const DEFENSE_RANGE_CELLS := 4   # 防御房射程（格）
-const DEFENSE_DMG := 30          # 每 tick 防御伤害
-const BREACH_DPS := 12           # 每 tick 丧尸破墙伤害
-const ZOMBIE_CORE_DPS := 15      # 每 tick 丧尸对指挥核心伤害
-const ROOM_COST := {             # 建造造价（废料，待平衡；引用建造 §3.3 拆除返还 α=0.5 对偶）
-	RoomDefs.Type.WALL: 20,
-	RoomDefs.Type.DEFENSE: 40,
-	RoomDefs.Type.PRODUCTION: 30,
-	RoomDefs.Type.COMMAND: 0,
+# 玩家初始部队（COC 式兵种配额）
+const ARMY := {
+	Zombie.Kind.WALKER: 36,
+	Zombie.Kind.RUNNER: 14,
+	Zombie.Kind.SPITTER: 8,
 }
 
-const SOFT_CAP_SCRAP := 500       # 废料软上限（经济 §5.2，待平衡）
-const SOFT_CAP_BIOMASS := 300     # 生物质软上限（经济 §5.2，待平衡）
-const DEMOLISH_REFUND := 0.5      # 拆除返还 α（建造 §3.3 对偶：修复成本 0.5×造价）
-const UPGRADE_COST := 15          # 升级/加固消耗（废料，待平衡）
-
 var grid: GridModel
-var zombies: Array[Zombie] = []  # 当前存活丧尸
-var wave: int = 0
-var level: int = 1
-var state: String = "build"      # build | combat | win | fail
-var scrap: int = 200
-var biomass: int = 50            # 生物质（应急资源，波次消耗引用经济 §5.5）
+var units: Array = []            # 玩家部队（存活）
+var army: Dictionary = {}        # 待部署剩余：kind -> count
+var state: String = "deploy"     # deploy | combat | win | fail
 var core_id: int = -1
 var next_id: int = 0
 var rng: RandomNumberGenerator
 
 # —— 动画/渲染事件（服务端权威产出，客户端消费做子弹/粒子，不回写逻辑）——
-var fire_events: Array = []     # 本 tick 防御开火：{from:Vector2(单元), to:Vector2(单元)}
-var hit_events: Array = []      # 本 tick 命中（丧尸受击）位置 Vector2(单元)
-var total_shots: int = 0        # 累计开火数（验证用）
-var entrances: Array = []       # 山洞出入口（单元坐标，位于网格外缘；PVE 尸潮涌入点 / PVP 敌方主攻方向）
+var fire_events: Array = []      # 本 tick 防御开火：{from:Vector2(单元), to:Vector2(单元)}
+var hit_events: Array = []       # 本 tick 命中（进攻单位受击）位置 Vector2(单元)
+var total_shots: int = 0         # 累计开火数（验证用）
+var army_total: int = 0          # 初始总兵力
 
 func _init(g: GridModel) -> void:
 	grid = g
+	if g.size != GRID_SIZE:
+		g.size = GRID_SIZE
 	rng = RandomNumberGenerator.new()
-	rng.seed = 12345             # 固定种子 → 确定性回放（ADR-004）
-	_refresh_core()
-	_compute_entrances()
+	rng.seed = 12345
+	army = {}
+	for k in ARMY.keys():
+		army[k] = ARMY[k]
+		army_total += ARMY[k]
+	_build_enemy_base()
 
-# 山洞出入口：网格四边中点外侧一格（凿穿山体形成的隧道口）
-# 北=前门(主 PVE 尸潮 / PVP 敌方主攻)，南/东/西=侧翼 PVE 涌入点
-func _compute_entrances() -> void:
-	var n: int = grid.size
-	var mid: int = int(n / 2)
-	entrances = [
-		Vector2(mid + 0.5, -0.5),     # 北（前门）
-		Vector2(mid + 0.5, n + 0.5),  # 南
-		Vector2(n + 0.5, mid + 0.5),  # 东
-		Vector2(-0.5, mid + 0.5),     # 西
-	]
+# —— 敌方基地生成（COC 式：核心居中 + 城墙闭环 + 防御塔 + 生产房）——
+func _build_enemy_base() -> void:
+	var s: int = GRID_SIZE
+	var mid: int = int(s / 2)
+	# 核心 2x2，正中
+	core_id = grid.place(RoomDefs.Type.COMMAND, Vector2i(mid - 1, mid - 1))
+	# 城墙闭环（围出内部空间，迫使进攻方破墙）—— COC 式城墙
+	var lo: int = mid - 5
+	var hi: int = mid + 4
+	for x in range(lo, hi + 1):
+		grid.place(RoomDefs.Type.WALL, Vector2i(x, lo))
+		grid.place(RoomDefs.Type.WALL, Vector2i(x, hi))
+	for y in range(lo + 1, hi):
+		grid.place(RoomDefs.Type.WALL, Vector2i(lo, y))
+		grid.place(RoomDefs.Type.WALL, Vector2i(hi, y))
+	# 内部四角防御塔（保护核心）
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid - 4, mid))
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid + 3, mid))
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid, mid - 4))
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid, mid + 3))
+	# 内部生产房（两侧）
+	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid - 4, mid - 4))
+	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid + 1, mid + 1))
 
-func _refresh_core() -> void:
-	core_id = -1
-	for id in grid.rooms:
-		if grid.rooms[id]["type"] == RoomDefs.Type.COMMAND:
-			core_id = id
-			break
+# —— 玩家下兵：在空白格部署一只指定兵种（进攻方）——
+# 成功返回 true；非法（非部署态/兵力耗尽/越界/占用）返回 false
+func deploy(kind: int, c: Vector2i) -> bool:
+	if state != "deploy" and state != "combat":
+		return false
+	if not army.has(kind) or army[kind] <= 0:
+		return false
+	if not grid.in_bounds(c):
+		return false
+	if grid.occupied.has(c):
+		return false
+	var z: RefCounted = Zombie.make(kind, 1)
+	z.id = next_id
+	next_id += 1
+	z.pos = Vector2(c.x + 0.5, c.y + 0.5)
+	z.prev_pos = z.pos
+	units.append(z)
+	army[kind] -= 1
+	if state == "deploy":
+		state = "combat"
+	return true
 
-# —— 玩家指令（建造，服务端权威结算）——
-func try_place(type: int, c: Vector2i) -> int:
-	if state != "build":
-		return -1
-	var cost: int = ROOM_COST.get(type, 20)
-	if scrap < cost:
-		return -1
-	var id: int = grid.place(type, c)
-	if id >= 0:
-		scrap -= cost
-		if type == RoomDefs.Type.COMMAND:
-			_refresh_core()
-	return id
-
-# —— 拆除（建造 §3.3：返还 原造价 × α=0.5；指挥核心不可拆）——
-# 成功返回返还废料数（≥0）；非法（非建造态/房间不存在/是核心）返回 -1
-func try_demolish(id: int) -> int:
-	if state != "build":
-		return -1
-	if not grid.rooms.has(id):
-		return -1
-	if grid.rooms[id]["type"] == RoomDefs.Type.COMMAND:
-		return -1
-	var cost: int = ROOM_COST.get(grid.rooms[id]["type"], 20)
-	var refund: int = int(cost * DEMOLISH_REFUND)
-	scrap += refund
-	grid.demolish(id)
-	if id == core_id:
-		core_id = -1
-	return refund
-
-# —— 升级/加固（建造 §3.3：消耗资源提升房间等级，不占新格）——
-# 成功返回加固后 HP（≥0）；非法返回 -1
-func try_upgrade(id: int) -> int:
-	if state != "build":
-		return -1
-	if not grid.rooms.has(id):
-		return -1
-	if scrap < UPGRADE_COST:
-		return -1
-	scrap -= UPGRADE_COST
-	grid.harden(id)
-	return grid.rooms[id]["hp"]
-
-# —— 波次开始：按 N(w) 生成丧尸（对齐波次 §3.3 规模公式）——
-func begin_wave(w: int) -> void:
-	if state != "build":
-		return
-	wave = w
-	state = "combat"
-	_compute_entrances()   # 网格可能已扩建，重算出入口
-	var n: int = WaveManager.count(w)
-	for i in range(n):
-		var k: int = Zombie.Kind.WALKER
-		if i % 5 == 0:
-			k = Zombie.Kind.RUNNER
-		elif i % 7 == 0:
-			k = Zombie.Kind.SPITTER
-		var z: Zombie = Zombie.make(k, w) as Zombie
-		z.id = next_id
-		next_id += 1
-		z.pos = _spawn_pos()
-		z.prev_pos = z.pos
-		zombies.append(z)
-
-func _spawn_pos() -> Vector2:
-	if entrances.is_empty():
-		_compute_entrances()
-	# 从随机一个山洞出入口涌入
-	return entrances[rng.randi_range(0, entrances.size() - 1)]
+func army_left() -> int:
+	var n: int = 0
+	for v in army.values():
+		n += v
+	return n
 
 # —— 固定 tick：推进一秒战斗结算 ——
 func tick() -> void:
@@ -152,31 +106,31 @@ func tick() -> void:
 		return
 	fire_events.clear()
 	hit_events.clear()
-	for z in zombies:
-		z.prev_pos = z.pos
-	var dist: Dictionary = _bfs_dist_to_core()
-	for z in zombies:
-		_move_zombie(z, dist)
+	for u in units:
+		u.prev_pos = u.pos
+	var dist: Dictionary = _bfs_dist_to_buildings()
+	for u in units:
+		_move_unit(u, dist)
 	_defense_fire()
 	# 清理阵亡
-	var alive: Array[Zombie] = []
-	for z in zombies:
-		if z.hp > 0:
-			alive.append(z)
-	zombies = alive
-	# 胜负判定
-	if core_id >= 0 and grid.rooms.has(core_id) and grid.rooms[core_id]["hp"] <= 0:
-		state = "fail"
+	var alive: Array = []
+	for u in units:
+		if u.hp > 0:
+			alive.append(u)
+	units = alive
+	# 胜负判定（核心被摧毁后 demolish 会把 core_id 置 -1，故同时判定两种情形）
+	if core_id < 0 or (core_id >= 0 and grid.rooms.has(core_id) and grid.rooms[core_id]["hp"] <= 0):
+		state = "win"
 		return
-	if zombies.is_empty():
-		_settle_wave()
+	if units.is_empty() and army_left() <= 0:
+		state = "fail"
 
-# —— 寻路：BFS 从指挥核心扩散的距离场（障碍=占据格，目标=核心）——
-func _bfs_dist_to_core() -> Dictionary:
+# —— 多源 BFS：从所有建筑(含城墙)扩散距离场，供进攻单位寻找最近目标 ——
+func _bfs_dist_to_buildings() -> Dictionary:
 	var dist: Dictionary = {}     # Vector2i -> int
 	var queue: Array = []
-	if core_id >= 0 and grid.rooms.has(core_id):
-		for c in grid.rooms[core_id]["cells"]:
+	for id in grid.rooms:
+		for c in grid.rooms[id]["cells"]:
 			dist[c] = 0
 			queue.append(c)
 	var head: int = 0
@@ -194,11 +148,9 @@ func _bfs_dist_to_core() -> Dictionary:
 	return dist
 
 func _passable(n: Vector2i) -> bool:
-	if grid.in_bounds(n):
-		return not grid.occupied.has(n)
-	# 网格外仅允许战场环带（限定 BFS 边界）
-	var m: int = SPAWN_MARGIN
-	return n.x >= -m and n.x < grid.size + m and n.y >= -m and n.y < grid.size + m
+	if not grid.in_bounds(n):
+		return false
+	return not grid.occupied.has(n)
 
 func _neighbors(c: Vector2i) -> Array:
 	return [
@@ -206,129 +158,61 @@ func _neighbors(c: Vector2i) -> Array:
 		Vector2i(c.x, c.y + 1), Vector2i(c.x, c.y - 1)
 	]
 
-func _is_core_cell(c: Vector2i) -> bool:
-	if core_id < 0:
-		return false
-	return _cell_in_cells(c, grid.rooms[core_id]["cells"])
-
-func _cell_in_cells(c: Vector2i, cells: Array) -> bool:
-	for cc in cells:
-		if cc == c:
-			return true
-	return false
-
-# —— 单只丧尸推进：沿距离场向核心移动；受阻则破墙/攻核心 ——
-func _move_zombie(z: Zombie, dist: Dictionary) -> void:
-	var cur: Vector2i = Vector2i(floor(z.pos.x), floor(z.pos.y))
-	# 已身处核心格 → 直接攻核心
-	if _is_core_cell(cur):
-		_damage_core(ZOMBIE_CORE_DPS)
-		return
-	var best: Vector2i = cur
-	var best_d: int = dist.get(cur, 0x7FFFFFFF)
-	var best_is_core: bool = false
+# —— 单只进攻单位：相邻有建筑则攻击最薄弱者；否则沿距离场向最近建筑推进 ——
+func _move_unit(u: RefCounted, dist: Dictionary) -> void:
+	var cur: Vector2i = Vector2i(floor(u.pos.x), floor(u.pos.y))
+	# 1. 相邻有建筑 → 攻击最薄弱者（城墙/塔/核心均可被拆）
+	var atk_cell: Vector2i = Vector2i(-1, -1)
+	var atk_hp: int = 2147483647
 	for n in _neighbors(cur):
-		var dd: int = dist.get(n, 0x7FFFFFFF)
+		if grid.occupied.has(n):
+			var rid: int = grid.occupied[n]
+			var hp: int = grid.rooms[rid]["hp"]
+			if hp < atk_hp:
+				atk_hp = hp
+				atk_cell = n
+	if atk_cell != Vector2i(-1, -1):
+		var rid: int = grid.occupied[atk_cell]
+		grid.rooms[rid]["hp"] -= UNIT_DMG
+		if grid.rooms[rid]["hp"] <= 0:
+			grid.demolish(rid)
+			if rid == core_id:
+				core_id = -1
+		return
+	# 2. 朝最近建筑移动
+	var best: Vector2i = cur
+	var best_d: int = dist.get(cur, 2147483647)
+	for n in _neighbors(cur):
+		if grid.occupied.has(n):
+			continue
+		var dd: int = dist.get(n, 2147483647)
 		if dd < best_d:
 			best_d = dd
 			best = n
-			best_is_core = _is_core_cell(n)
-	# 距离场未覆盖（如被墙完全隔离）：改为几何向核心推进，遇障则攻击
-	if best_d == 0x7FFFFFFF:
-		_move_toward_core_geometric(z)
-		return
 	if best == cur:
-		_breach_or_attack(z, cur)
 		return
-	if best_is_core:
-		_damage_core(ZOMBIE_CORE_DPS)
-		return
-	# 朝目标格中心移动（每 tick 走 speed 格，cell 基）
-	var target := Vector2(best.x + 0.5, best.y + 0.5)
-	var to: Vector2 = target - z.pos
+	var target: Vector2 = Vector2(best.x + 0.5, best.y + 0.5)
+	var to: Vector2 = target - u.pos
 	var len: float = to.length()
-	if len <= z.speed:
-		z.pos = target
+	if len <= u.speed:
+		u.pos = target
 	else:
-		z.pos += to.normalized() * z.speed
+		u.pos += to.normalized() * u.speed
 
-# 几何向核心推进（BFS 不可达时的兜底）：遇墙/房则攻击，打穿后继续
-func _move_toward_core_geometric(z: Zombie) -> void:
-	var cc := _core_center()
-	var to: Vector2 = cc - z.pos
-	var len: float = to.length()
-	if len <= z.speed:
-		z.pos = cc
-		if _is_core_cell(Vector2i(floor(z.pos.x), floor(z.pos.y))):
-			_damage_core(ZOMBIE_CORE_DPS)
-		return
-	var step := to.normalized() * z.speed
-	var next_pos := z.pos + step
-	var next_cell := Vector2i(floor(next_pos.x), floor(next_pos.y))
-	var cur_cell := Vector2i(floor(z.pos.x), floor(z.pos.y))
-	if next_cell != cur_cell and grid.in_bounds(next_cell) and grid.occupied.has(next_cell):
-		var rid: int = grid.occupied[next_cell]
-		grid.rooms[rid]["hp"] -= BREACH_DPS
-		if grid.rooms[rid]["hp"] <= 0:
-			grid.demolish(rid)
-			if rid == core_id:
-				core_id = -1
-	else:
-		z.pos = next_pos
-
-# 受阻时：优先攻击相邻核心；否则破"距核心最近"的阻挡格（HP 归零→breach 变为可通行）
-func _breach_or_attack(z: Zombie, cur: Vector2i) -> void:
-	var target: Vector2i = cur
-	var target_d: float = INF
-	var target_is_core: bool = false
-	var cc := _core_center()
-	for n in _neighbors(cur):
-		if _is_core_cell(n):
-			target = n
-			target_is_core = true
-			target_d = 0.0
-			break
-		if grid.in_bounds(n) and grid.occupied.has(n):
-			var dd: float = cc.distance_to(Vector2(n.x + 0.5, n.y + 0.5))
-			if dd < target_d:
-				target_d = dd
-				target = n
-				target_is_core = false
-	if target_is_core:
-		_damage_core(ZOMBIE_CORE_DPS)
-		return
-	if target != cur:
-		var rid: int = grid.occupied[target]
-		grid.rooms[rid]["hp"] -= BREACH_DPS
-		if grid.rooms[rid]["hp"] <= 0:
-			grid.demolish(rid)
-			if rid == core_id:
-				core_id = -1
-
-func _core_center() -> Vector2:
-	if core_id < 0 or not grid.rooms.has(core_id):
-		return Vector2(grid.size * 0.5, grid.size * 0.5)
-	return _room_center(grid.rooms[core_id])
-
-func _damage_core(dmg: int) -> void:
-	if core_id < 0 or not grid.rooms.has(core_id):
-		return
-	grid.rooms[core_id]["hp"] -= dmg
-
-# —— 防御房自动开火：每 tick 命中射程内最近丧尸 ——
+# —— 防御塔自动开火：每 tick 命中射程内最近进攻单位 ——
 func _defense_fire() -> void:
 	for id in grid.rooms:
 		var r: Dictionary = grid.rooms[id]
 		if r["type"] != RoomDefs.Type.DEFENSE:
 			continue
 		var center := _room_center(r)
-		var target: Zombie = null
+		var target = null
 		var best_d: float = INF
-		for z in zombies:
-			var d: float = center.distance_to(z.pos)
+		for u in units:
+			var d: float = center.distance_to(u.pos)
 			if d <= DEFENSE_RANGE_CELLS and d < best_d:
 				best_d = d
-				target = z
+				target = u
 		if target != null:
 			target.hp -= DEFENSE_DMG
 			fire_events.append({"from": center, "to": target.pos})
@@ -340,32 +224,3 @@ func _room_center(r: Dictionary) -> Vector2:
 	for c in r["cells"]:
 		sum += Vector2(c.x + 0.5, c.y + 0.5)
 	return sum / r["cells"].size()
-
-# —— 波次结算：消耗（逐字引用经济 §5.5 / 波次 §3.5）+ 成功奖励 + 等级成长 ——
-func _settle_wave() -> void:
-	var ammo: int = AmmoCost(wave)    # 废料（弹药）
-	var bio: int = BioCost(wave)      # 生物质（应急）
-	scrap = max(0, scrap - ammo)
-	biomass = max(0, biomass - bio)
-	# 成功抵御奖励（基线随 w，待平衡；维持经济可继续扩张）
-	scrap += 15
-	biomass += 5
-	# 资源软上限（经济 §5.2）：结算后钳制，超出部分丢弃（仓储提升上限留待 Phase D）
-	scrap = min(scrap, SOFT_CAP_SCRAP)
-	biomass = min(biomass, SOFT_CAP_BIOMASS)
-	# 成长：每存活 3 波堡垒等级 +1（引用概念 §8.2 / 建造 §5.2）
-	if wave % 3 == 0 and level < 6:
-		level += 1
-		grid.set_level(level)
-		_compute_entrances()   # 网格扩建后重算出入口
-	if wave >= 10:
-		state = "win"
-	else:
-		state = "build"
-
-# 波次消耗公式（逐字引用经济 §5.5 / 波次 §5.4）
-static func AmmoCost(w: int) -> int:
-	return roundi(20 * (1.0 + 0.08 * (w - 1)))
-
-static func BioCost(w: int) -> int:
-	return roundi(10 * (1.0 + 0.05 * (w - 1)))

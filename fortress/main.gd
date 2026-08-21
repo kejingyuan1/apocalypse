@@ -1,8 +1,8 @@
 extends Node2D
 
-# 《末日堡垒》渲染/输入翻译层（Phase 4 垂直切片）
+# 《末日堡垒 · COC 式进攻》渲染/输入翻译层
 # 逻辑全部在 core/（服务端可移植），本脚本只做输入翻译 + 节点级动画渲染。
-# 主题：凿穿山体建成的地下堡垒（18×18 凿空空间 + 四向山洞出入口）。
+# 主题：山中堡垒（凿穿山体建成的地下要塞）+ COC 式进攻：玩家带兵从四周任意空地下兵。
 # 渲染管线：背景层(BGLayer._draw) -> 单位层(AnimatedSprite2D) -> 特效层(FXLayer._draw)。
 
 const RoomDefs := preload("res://core/room_defs.gd")
@@ -25,15 +25,13 @@ const COLOR_FLOOR_A := Color(0.12, 0.12, 0.13)
 const COLOR_FLOOR_B := Color(0.10, 0.10, 0.11)
 const COLOR_GRID := Color(0.22, 0.22, 0.24)
 const COLOR_GRID_STRONG := Color(0.30, 0.30, 0.33)
-const COLOR_GATE := Color(0.02, 0.02, 0.03)
-const COLOR_GATE_RIM := Color(0.45, 0.30, 0.18)
-const COLOR_HOVER_OK := Color(0.30, 0.75, 0.40, 0.35)
-const COLOR_HOVER_BAD := Color(0.90, 0.25, 0.25, 0.40)
+const COLOR_DEPLOY_OK := Color(0.30, 0.75, 0.40, 0.40)
+const COLOR_DEPLOY_BAD := Color(0.90, 0.25, 0.25, 0.40)
 const COLOR_HP_BG := Color(0.10, 0.10, 0.10)
 const COLOR_HP_GREEN := Color(0.35, 0.82, 0.40)
 const COLOR_HP_ORANGE := Color(0.91, 0.57, 0.24)
 const COLOR_HP_RED := Color(0.88, 0.28, 0.28)
-const COLOR_ZOMBIE := {
+const COLOR_UNIT := {
 	Zombie.Kind.WALKER: Color(0.82, 0.52, 0.30),
 	Zombie.Kind.RUNNER: Color(0.85, 0.30, 0.30),
 	Zombie.Kind.SPITTER: Color(0.72, 0.34, 0.78),
@@ -57,7 +55,7 @@ const ZOMBIE_SHEETS := {
 
 var grid: GridModel
 var sim: BattleSim
-var selected_type: int = RoomDefs.Type.DEFENSE
+var selected_kind: int = Zombie.Kind.WALKER
 var tick_acc: float = 0.0
 var camera: Camera2D
 var anim_time: float = 0.0
@@ -73,7 +71,7 @@ var turret_aim: Dictionary = {}
 var turret_flash: Dictionary = {}
 var room_flash: Dictionary = {}
 var core_flash: float = 0.0
-var prev_zombie_ids: Dictionary = {}
+var prev_unit_ids: Dictionary = {}
 var prev_room_hp: Dictionary = {}
 var prev_core_hp: int = -1
 var dust_acc: float = 0.0
@@ -81,7 +79,7 @@ var smoke_acc: Dictionary = {}
 
 # —— 实体精灵实例 ——
 var room_sprites: Dictionary = {}
-var zombie_sprites: Dictionary = {}
+var unit_sprites: Dictionary = {}
 var _frames_cache: Dictionary = {}
 var _shot_pending: bool = false
 var _shot_frames: int = 0
@@ -89,13 +87,7 @@ var _shot_frames: int = 0
 func _ready() -> void:
 	_setup_layers()
 	grid = GridModel.new()
-	grid.set_level(1)
-	var c := grid.size / 2 - 1
-	var cid := grid.place(RoomDefs.Type.COMMAND, Vector2i(c, c))
-	if cid >= 0:
-		grid.rooms[cid]["hp"] = RoomDefs.hp(RoomDefs.Type.COMMAND)
-		prev_room_hp[cid] = grid.rooms[cid]["hp"]
-		prev_core_hp = grid.rooms[cid]["hp"]
+	# 战斗内核会自行设定网格尺寸并生成敌方基地
 	sim = BattleSim.new(grid)
 	_setup_camera()
 	_sync_rooms()
@@ -135,73 +127,24 @@ func _grid_center_world() -> Vector2:
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_LEFT:
-			if sim.state == "build":
-				try_place(world_to_cell(get_global_mouse_position()))
-		elif event.button_index == MOUSE_BUTTON_RIGHT:
-			if sim.state == "build":
-				_demolish_at_cell(world_to_cell(get_global_mouse_position()))
+			if sim.state == "deploy" or sim.state == "combat":
+				deploy_at(world_to_cell(get_global_mouse_position()))
 	elif event is InputEventKey and event.pressed:
 		match event.keycode:
-			KEY_1: selected_type = RoomDefs.Type.WALL
-			KEY_2: selected_type = RoomDefs.Type.DEFENSE
-			KEY_3: selected_type = RoomDefs.Type.PRODUCTION
-			KEY_X, KEY_DELETE: _demolish_at_mouse()
-			KEY_U: _upgrade_at_mouse()
-			KEY_SPACE: start_wave()
-		_sync_state()
-
-func _pick_room_id() -> int:
-	return grid.occupied.get(world_to_cell(get_global_mouse_position()), -1)
-
-func _demolish_at_cell(c: Vector2i) -> void:
-	var id: int = grid.occupied.get(c, -1)
-	if id < 0:
-		return
-	var refund: int = sim.try_demolish(id)
-	if refund >= 0:
-		turret_aim.erase(id)
-		turret_flash.erase(id)
-		room_flash.erase(id)
-		prev_room_hp.erase(id)
-		if room_sprites.has(id):
-			room_sprites[id].queue_free()
-			room_sprites.erase(id)
-		_sync_state()
-
-func _demolish_at_mouse() -> void:
-	_demolish_at_cell(world_to_cell(get_global_mouse_position()))
-
-func _upgrade_at_mouse() -> void:
-	var id: int = _pick_room_id()
-	if id < 0:
-		return
-	var new_hp: int = sim.try_upgrade(id)
-	if new_hp >= 0:
-		room_flash[id] = 0.3
+			KEY_1: selected_kind = Zombie.Kind.WALKER
+			KEY_2: selected_kind = Zombie.Kind.RUNNER
+			KEY_3: selected_kind = Zombie.Kind.SPITTER
 		_sync_state()
 
 func world_to_cell(p: Vector2) -> Vector2i:
 	return Vector2i(floor(p.x / TILE), floor(p.y / TILE))
 
-func try_place(c: Vector2i) -> void:
-	var id: int = sim.try_place(selected_type, c)
-	if id >= 0:
-		grid.rooms[id]["hp"] = RoomDefs.hp(selected_type)
-		prev_room_hp[id] = grid.rooms[id]["hp"]
-		var rc := _room_center_world(grid.rooms[id])
-		_spawn_ring(rc, RoomDefs.color(selected_type))
-		room_flash[id] = 0.2
-		_sync_rooms()
+func deploy_at(c: Vector2i) -> void:
+	var ok: bool = sim.deploy(selected_kind, c)
+	if ok:
+		var rc := Vector2(c.x * TILE + TILE / 2.0, c.y * TILE + TILE / 2.0)
+		_spawn_dust(rc, COLOR_UNIT[selected_kind], 0.8)
 		_sync_state()
-
-func start_wave() -> void:
-	if sim.state != "build":
-		return
-	sim.begin_wave(sim.wave + 1)
-	tick_acc = 0.0
-	for e in sim.entrances:
-		_spawn_dust(e * TILE, COLOR_ROCK_HI, 0.9)
-	_sync_state()
 
 # ===================== 主循环 =====================
 func _process(delta: float) -> void:
@@ -215,7 +158,7 @@ func _process(delta: float) -> void:
 
 	_update_turret_idle(delta)
 	_sync_rooms()
-	_sync_zombies()
+	_sync_units()
 	if sim.state == "combat":
 		tick_acc += delta
 		if tick_acc >= BattleSim.TICK:
@@ -228,7 +171,7 @@ func _process(delta: float) -> void:
 	fx_layer.queue_redraw()
 	if _shot_pending:
 		_shot_frames += 1
-		if _shot_frames == 12:
+		if _shot_frames == 14:
 			var img := get_viewport().get_texture().get_image()
 			if img:
 				img.save_png("D:/SAFE/apocalypse/fortress/screenshot.png")
@@ -260,21 +203,21 @@ func _consume_sim_events() -> void:
 				room_sprites[tid].play("fire")
 	for ev: Vector2 in sim.hit_events:
 		_spawn_spark(ev * TILE, COLOR_BULLET, 0.25)
-		_spawn_spark(ev * TILE, COLOR_ZOMBIE[Zombie.Kind.WALKER], 0.3)
+		_spawn_spark(ev * TILE, COLOR_UNIT[Zombie.Kind.WALKER], 0.3)
 
 func _detect_state_changes() -> void:
 	var cur: Dictionary = {}
-	for z: Zombie in sim.zombies:
+	for z: Zombie in sim.units:
 		cur[z.id] = z.pos
-		if not prev_zombie_ids.has(z.id):
+		if not prev_unit_ids.has(z.id):
 			_spawn_dust(z.pos * TILE, COLOR_ROCK_HI, 1.0)
-		prev_zombie_ids[z.id] = z.pos
-	for id: int in prev_zombie_ids.keys():
+		prev_unit_ids[z.id] = z.pos
+	for id: int in prev_unit_ids.keys():
 		if not cur.has(id):
-			var p: Vector2 = prev_zombie_ids[id] * TILE
+			var p: Vector2 = prev_unit_ids[id] * TILE
 			_spawn_spark(p, Color(0.5, 0.35, 0.25), 0.4)
 			_spawn_dust(p, Color(0.35, 0.25, 0.2), 0.5)
-			prev_zombie_ids.erase(id)
+			prev_unit_ids.erase(id)
 	if sim.core_id >= 0 and grid.rooms.has(sim.core_id):
 		var hp: int = grid.rooms[sim.core_id]["hp"]
 		if prev_core_hp >= 0 and hp < prev_core_hp:
@@ -388,29 +331,29 @@ func _on_turret_finished(id: int) -> void:
 	if room_sprites.has(id) and room_sprites[id].animation == "fire":
 		room_sprites[id].play("idle")
 
-func _sync_zombies() -> void:
+func _sync_units() -> void:
 	var cur: Dictionary = {}
 	var alpha: float = clamp(tick_acc / BattleSim.TICK, 0.0, 1.0)
-	for z: Zombie in sim.zombies:
+	for z: Zombie in sim.units:
 		cur[z.id] = true
-		if not zombie_sprites.has(z.id):
+		if not unit_sprites.has(z.id):
 			var sp := AnimatedSprite2D.new()
 			var path: String = ZOMBIE_SHEETS.get(z.kind, ZOMBIE_SHEETS[Zombie.Kind.WALKER])
 			sp.sprite_frames = _make_frames(path, "walk", 4, 7.0, true)
 			sp.play("walk")
 			unit_layer.add_child(sp)
-			zombie_sprites[z.id] = sp
+			unit_sprites[z.id] = sp
 		var p: Vector2 = z.prev_pos.lerp(z.pos, alpha)
 		var wp: Vector2 = p * TILE
-		var sp: AnimatedSprite2D = zombie_sprites[z.id]
+		var sp: AnimatedSprite2D = unit_sprites[z.id]
 		sp.position = wp
 		var dir: Vector2 = z.pos - z.prev_pos
 		if dir.length() > 0.001:
 			sp.flip_h = dir.x < 0.0
-	for id: int in zombie_sprites.keys():
+	for id: int in unit_sprites.keys():
 		if not cur.has(id):
-			zombie_sprites[id].queue_free()
-			zombie_sprites.erase(id)
+			unit_sprites[id].queue_free()
+			unit_sprites.erase(id)
 
 # ===================== 粒子系统 =====================
 func _spawn_spark(pos: Vector2, col: Color, life: float) -> void:
@@ -519,30 +462,27 @@ func _sync_state() -> void:
 
 func update_hud() -> void:
 	if hud:
-		hud.set_state(sim.state, sim.wave, sim.zombies.size(), sim.scrap, sim.biomass, selected_type)
+		hud.set_state(sim.state, sim.army, sim.units.size(), sim.army_total, selected_kind)
 
 # ===================== 开发期截图 =====================
 func _dev_shot_setup() -> void:
-	var c := grid.size / 2 - 1
-	sim.scrap = 1000
-	var layout := [
-		[RoomDefs.Type.WALL, Vector2i(c - 1, c - 1)], [RoomDefs.Type.WALL, Vector2i(c, c - 1)],
-		[RoomDefs.Type.WALL, Vector2i(c + 1, c - 1)], [RoomDefs.Type.WALL, Vector2i(c - 1, c)],
-		[RoomDefs.Type.WALL, Vector2i(c + 1, c)], [RoomDefs.Type.WALL, Vector2i(c - 1, c + 1)],
-		[RoomDefs.Type.WALL, Vector2i(c, c + 1)], [RoomDefs.Type.WALL, Vector2i(c + 1, c + 1)],
-		[RoomDefs.Type.DEFENSE, Vector2i(c - 2, c - 2)], [RoomDefs.Type.DEFENSE, Vector2i(c + 2, c - 2)],
-		[RoomDefs.Type.DEFENSE, Vector2i(c - 2, c + 2)], [RoomDefs.Type.DEFENSE, Vector2i(c + 2, c + 2)],
-		[RoomDefs.Type.PRODUCTION, Vector2i(c, c - 2)],
-	]
-	for item: Array in layout:
-		var tid: int = int(item[0])
-		var cid: Vector2i = item[1] as Vector2i
-		var id: int = sim.try_place(tid, cid)
-		if id >= 0:
-			grid.rooms[id]["hp"] = RoomDefs.hp(tid)
-			prev_room_hp[id] = grid.rooms[id]["hp"]
-	_sync_rooms()
-	start_wave()
+	# 敌方基地由 sim 自动生成；这里在四周空地批量下满部队，并推进若干 tick 制造战斗画面
+	var s: int = grid.size
+	var cells: Array = []
+	for y in [1, 2, s - 2, s - 3]:
+		for x in range(1, s - 1):
+			cells.append(Vector2i(x, y))
+	var order := [Zombie.Kind.WALKER, Zombie.Kind.RUNNER, Zombie.Kind.SPITTER]
+	var ci := 0
+	for k in order:
+		while sim.army[k] > 0 and ci < cells.size():
+			if sim.deploy(k, cells[ci]):
+				ci += 1
+	for i in range(10):
+		sim.tick()
+		_consume_sim_events()
+		_detect_state_changes()
+	_sync_state()
 	RenderingServer.viewport_set_update_mode(get_viewport().get_viewport_rid(), RenderingServer.VIEWPORT_UPDATE_ALWAYS)
 	_shot_pending = true
 
@@ -555,10 +495,10 @@ class BGLayer extends Node2D:
 
 	func _draw_mountain() -> void:
 		var grid: GridModel = main.grid
-		var sim: BattleSim = main.sim
 		var W := grid.size * TILE
 		var R: float = W * 2.0
 		draw_rect(Rect2(Vector2(-R, -R), Vector2(R * 2.0, R * 2.0)), COLOR_SKY)
+		# 山体边框（凿穿山体建成要塞）
 		var border := TILE * 1.7
 		draw_rect(Rect2(Vector2(-border, -border), Vector2(W + border * 2.0, border)), COLOR_ROCK)
 		draw_rect(Rect2(Vector2(-border, W), Vector2(W + border * 2.0, border)), COLOR_ROCK)
@@ -567,38 +507,27 @@ class BGLayer extends Node2D:
 		for i in range(40):
 			var rx := -border + _hash(i * 1.7) * (W + border * 2.0)
 			var ry := -border + _hash(i * 3.1 + 5.0) * (W + border * 2.0)
-			var s := 4.0 + _hash(i * 5.3) * 10.0
-			draw_rect(Rect2(Vector2(rx, ry), Vector2(s, s)), COLOR_ROCK_LO if i % 2 == 0 else COLOR_ROCK_HI)
+			var sz := 4.0 + _hash(i * 5.3) * 10.0
+			draw_rect(Rect2(Vector2(rx, ry), Vector2(sz, sz)), COLOR_ROCK_LO if i % 2 == 0 else COLOR_ROCK_HI)
 		for i in range(int(W / (TILE * 1.5)) + 1):
 			var x := i * TILE * 1.5 + _hash(i * 2.2) * 10.0
 			var h := 10.0 + _hash(i * 4.4) * 16.0
 			_fill_poly(_tri(Vector2(x, -border), Vector2(x + 12, -border), Vector2(x + 6, -border + h)), COLOR_ROCK_LO)
+		# 棋盘地面
 		for x in range(grid.size):
 			for y in range(grid.size):
 				var col := COLOR_FLOOR_A if (x + y) % 2 == 0 else COLOR_FLOOR_B
 				draw_rect(Rect2(Vector2(x * TILE, y * TILE), Vector2(TILE, TILE)), col)
+		# 核心光晕
 		var cc := Vector2(grid.size * TILE / 2.0, grid.size * TILE / 2.0)
 		for r in range(6, 0, -1):
 			var a := 0.05 * (r / 6.0)
 			draw_circle(cc, float(r) * TILE * 0.5, Color(0.91, 0.57, 0.24, a))
+		# 网格线
 		for i in range(grid.size + 1):
 			var col := COLOR_GRID_STRONG if i % 3 == 0 else COLOR_GRID
 			draw_line(Vector2(i * TILE, 0), Vector2(i * TILE, W), col, 1.5 if i % 3 == 0 else 1.0)
 			draw_line(Vector2(0, i * TILE), Vector2(W, i * TILE), col, 1.5 if i % 3 == 0 else 1.0)
-		for e: Vector2 in sim.entrances:
-			_draw_gate(e * TILE)
-
-	func _draw_gate(g: Vector2) -> void:
-		var grid: GridModel = main.grid
-		var w := TILE * 1.1
-		var h := TILE * 1.3
-		var inward := Vector2(grid.size * TILE / 2.0, grid.size * TILE / 2.0) - g
-		if abs(inward.x) > abs(inward.y):
-			h = TILE * 1.1; w = TILE * 1.3
-		draw_circle(g, w * 0.6, COLOR_GATE)
-		draw_arc(g, w * 0.6, 0.0, TAU, 24, COLOR_GATE_RIM, 4.0)
-		var font := ThemeDB.fallback_font
-		draw_string(font, g - Vector2(8, w * 0.6 + 4), "洞", HORIZONTAL_ALIGNMENT_CENTER, -1, 12, COLOR_GATE_RIM)
 
 	func _fill_poly(pts: PackedVector2Array, col: Color) -> void:
 		draw_polygon(pts, PackedColorArray([col]))
@@ -617,7 +546,7 @@ class FXLayer extends Node2D:
 	func _draw() -> void:
 		_draw_hp_bars()
 		_draw_flashes()
-		_draw_hover_preview()
+		_draw_deploy_preview()
 		_draw_bullets()
 		_draw_particles()
 
@@ -631,7 +560,7 @@ class FXLayer extends Node2D:
 				var origin := Vector2(r["origin"].x * TILE + 2.0, r["origin"].y * TILE - 9.0)
 				_draw_hp_bar(origin, RoomDefs.size(r["type"]).x * TILE - 4.0, r["hp"], RoomDefs.hp(r["type"]))
 		var zr := TILE * 0.26
-		for z: Zombie in sim.zombies:
+		for z: Zombie in sim.units:
 			if z.hp < z.max_hp:
 				var alpha: float = clamp(tick_acc / BattleSim.TICK, 0.0, 1.0)
 				var p: Vector2 = z.prev_pos.lerp(z.pos, alpha)
@@ -662,52 +591,22 @@ class FXLayer extends Node2D:
 				var rect := Rect2(Vector2(r["origin"].x * TILE, r["origin"].y * TILE), Vector2(sz.x * TILE, sz.y * TILE))
 				draw_rect(rect, Color(1, 1, 1, 0.5 * (room_flash[id] / 0.3)))
 
-	func _draw_hover_preview() -> void:
+	func _draw_deploy_preview() -> void:
 		var grid: GridModel = main.grid
 		var sim: BattleSim = main.sim
-		var selected_type: int = main.selected_type
-		if sim.state != "build":
+		if sim.state != "deploy" and sim.state != "combat":
 			return
 		var c: Vector2i = main.world_to_cell(get_global_mouse_position())
 		if c.x < 0 or c.y < 0 or c.x >= grid.size or c.y >= grid.size:
 			return
-		var hover_id: int = grid.occupied.get(c, -1)
-		if hover_id >= 0 and grid.rooms[hover_id]["type"] == RoomDefs.Type.DEFENSE:
-			var center := Vector2(c.x * TILE + TILE / 2.0, c.y * TILE + TILE / 2.0)
-			var radius := BattleSim.DEFENSE_RANGE_CELLS * TILE
-			draw_circle(center, radius, Color(0.20, 0.58, 0.82, 0.08))
-			draw_arc(center, radius, 0.0, TAU, 64, Color(0.20, 0.58, 0.82, 0.35), 1.5)
-		if selected_type == RoomDefs.Type.DEFENSE:
-			var center := Vector2(c.x * TILE + TILE / 2.0, c.y * TILE + TILE / 2.0)
-			var radius := BattleSim.DEFENSE_RANGE_CELLS * TILE
-			draw_circle(center, radius, Color(0.20, 0.58, 0.82, 0.10))
-			draw_arc(center, radius, 0.0, TAU, 64, Color(0.20, 0.58, 0.82, 0.40), 1.5)
-		var sz: Vector2i = RoomDefs.size(selected_type)
-		var rect := Rect2(Vector2(c.x * TILE, c.y * TILE), Vector2(sz.x * TILE, sz.y * TILE))
-		var cost: int = BattleSim.ROOM_COST.get(selected_type, 20)
-		var ok: bool = (sim.scrap >= cost) and grid.can_place(selected_type, c)
-		draw_rect(rect, COLOR_HOVER_OK if ok else COLOR_HOVER_BAD)
-		var dash_len := 6.0
-		var perimeter := 2.0 * (rect.size.x + rect.size.y)
-		if perimeter > 0:
-			var segs := int(perimeter / (dash_len * 2.0))
-			for i in range(segs):
-				var t0 := float(i) * 2.0 * dash_len / perimeter
-				var t1 := (float(i) * 2.0 + 1.0) * dash_len / perimeter
-				draw_line(_rect_perimeter_point(rect, t0), _rect_perimeter_point(rect, t1), Color(1, 1, 1, 0.7), 1.5)
-
-	func _rect_perimeter_point(rect: Rect2, t: float) -> Vector2:
-		var x := rect.position.x; var y := rect.position.y
-		var w := rect.size.x; var h := rect.size.y
-		var per := 2.0 * (w + h)
-		var d := t * per
-		if d < w: return Vector2(x + d, y)
-		d -= w
-		if d < h: return Vector2(x + w, y + d)
-		d -= h
-		if d < w: return Vector2(x + w - d, y + h)
-		d -= w
-		return Vector2(x, y + h - d)
+		var ok: bool = (not grid.occupied.has(c))
+		var col: Color = main.COLOR_DEPLOY_OK if ok else main.COLOR_DEPLOY_BAD
+		var rect := Rect2(Vector2(c.x * TILE, c.y * TILE), Vector2(TILE, TILE))
+		draw_rect(rect, col)
+		var cx := c.x * TILE + TILE / 2.0
+		var cy := c.y * TILE + TILE / 2.0
+		draw_circle(Vector2(cx, cy), TILE * 0.28, main.COLOR_UNIT[main.selected_kind])
+		draw_arc(Vector2(cx, cy), TILE * 0.28, 0.0, TAU, 20, Color(1, 1, 1, 0.8), 2.0)
 
 	func _draw_bullets() -> void:
 		for b: Dictionary in main.bullets:

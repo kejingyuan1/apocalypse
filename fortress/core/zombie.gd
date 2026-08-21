@@ -4,9 +4,9 @@ extends RefCounted
 # 注意：本脚本不使用 class_name；工厂方法通过运行时 load 自身实例化，避免 preload 自引用循环。
 enum Kind { WALKER, RUNNER, SPITTER }
 
-const BASE_SPEED := 1.5        # cells/s（Walker 基准，待平衡 pass；避免 20 格/秒导致跳墙）
-const HP_BASE := 20
-const HP_GROWTH := 0.15        # 每波 +15%（波次 §3.3）
+const BASE_SPEED := 1.5        # cells/s（Walker 基准）
+const HP_BASE := 60            # 进攻单位基础血量（需能扛住防御塔数发才被击杀）
+const HP_GROWTH := 0.15        # 每波 +15%
 
 var id: int = -1
 var kind: int = Kind.WALKER

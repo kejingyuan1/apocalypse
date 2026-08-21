@@ -16,13 +16,13 @@ static func size(type: int) -> Vector2i:
 		Type.COMMAND: return Vector2i(2, 2)
 	return Vector2i(1, 1)
 
-# 承伤 HP（对齐《波次系统 GDD》§5.3 HP 表）
+# 承伤 HP：城墙为 COC 式高血量阻挡（需破墙），其余对照原设计
 static func hp(type: int) -> int:
 	match type:
-		Type.WALL: return 120
+		Type.WALL: return 280      # COC 式城墙：高血量，迫使进攻方破墙
 		Type.DEFENSE: return 300
 		Type.PRODUCTION: return 200
-		Type.COMMAND: return 600   # 对齐《波次系统 GDD》§5.3 指挥核心 HP
+		Type.COMMAND: return 600   # 指挥核心 HP
 	return 100
 
 # 美术表现：不用拉伸后的低清像素精灵，改用色块 + 符号，保证任意尺寸都清晰可读
