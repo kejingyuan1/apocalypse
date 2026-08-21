@@ -23,8 +23,8 @@ const COLOR_ROCK_HI := Color(0.20, 0.19, 0.20)
 const COLOR_ROCK_LO := Color(0.07, 0.07, 0.08)
 const COLOR_FLOOR_A := Color(0.12, 0.12, 0.13)
 const COLOR_FLOOR_B := Color(0.10, 0.10, 0.11)
-const COLOR_GRID := Color(0.22, 0.22, 0.24)
-const COLOR_GRID_STRONG := Color(0.30, 0.30, 0.33)
+const COLOR_GRID := Color(0.32, 0.30, 0.28, 0.45)
+const COLOR_GRID_STRONG := Color(0.45, 0.42, 0.38, 0.55)
 const COLOR_DEPLOY_OK := Color(0.30, 0.75, 0.40, 0.40)
 const COLOR_DEPLOY_BAD := Color(0.90, 0.25, 0.25, 0.40)
 const COLOR_HP_BG := Color(0.10, 0.10, 0.10)
@@ -71,8 +71,8 @@ var fx_layer: FXLayer
 var bg_sprite: Sprite2D
 var bg_paths: Array = [
 	"res://assets/backgrounds/bg_bunker.png",
-	"res://assets/backgrounds/bg_overgrown.png",
-	"res://assets/backgrounds/bg_industrial.png",
+	"res://assets/backgrounds/bg_forest.png",
+	"res://assets/backgrounds/bg_wasteland.png",
 ]
 var bg_index: int = 0
 
@@ -96,6 +96,7 @@ var unit_sprites: Dictionary = {}
 var _frames_cache: Dictionary = {}
 var _shot_pending: bool = false
 var _shot_frames: int = 0
+var _intro_tween: Tween = null
 
 func _ready() -> void:
 	_setup_layers()
@@ -106,6 +107,7 @@ func _ready() -> void:
 	_setup_background()
 	_sync_rooms()
 	_sync_state()
+	_intro_camera()
 	if OS.get_cmdline_args().has("--shot"):
 		_dev_shot_setup()
 
@@ -142,6 +144,19 @@ func _apply_zoom() -> void:
 func _grid_center_world() -> Vector2:
 	return Vector2(grid.size * TILE / 2.0, grid.size * TILE / 2.0)
 
+func _intro_camera() -> void:
+	if camera == null:
+		return
+	var start_zoom: float = clampf(base_zoom * 0.55, 0.02, 10.0)
+	camera.zoom = Vector2(start_zoom, start_zoom)
+	_intro_tween = create_tween()
+	_intro_tween.tween_property(camera, "zoom", Vector2(base_zoom, base_zoom), 2.0).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+
+func _cancel_intro() -> void:
+	if _intro_tween and _intro_tween.is_valid():
+		_intro_tween.kill()
+		_intro_tween = null
+
 # ===================== 背景皮肤 =====================
 func _setup_background() -> void:
 	bg_sprite = Sprite2D.new()
@@ -165,14 +180,18 @@ func _set_background(idx: int) -> void:
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			_cancel_intro()
 			if sim.state == "deploy" or sim.state == "combat":
 				deploy_at(world_to_cell(get_global_mouse_position()))
 		elif event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
+			_cancel_intro()
 			_zoom_at(get_global_mouse_position(), 1.15)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
+			_cancel_intro()
 			_zoom_at(get_global_mouse_position(), 1.0 / 1.15)
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
 			if event.pressed:
+				_cancel_intro()
 				_panning = true
 				_pan_start = get_global_mouse_position()
 				_cam_start = camera.position
@@ -555,6 +574,8 @@ func update_hud() -> void:
 
 # ===================== 开发期截图 =====================
 func _dev_shot_setup() -> void:
+	_cancel_intro()
+	camera.zoom = Vector2(base_zoom, base_zoom)
 	# 敌方基地由 sim 自动生成；在外墙外围一圈下满部队，并推进战斗直到开火/结束
 	var mid := int(BattleSim.BASE_OFFSET + BattleSim.BASE_REGION / 2)
 	var wl := mid - BattleSim.WALL_HALF
@@ -595,11 +616,11 @@ class BGLayer extends Node2D:
 	func _draw_mountain() -> void:
 		var grid: GridModel = main.grid
 		var W := grid.size * TILE
-		# 网格线（叠在 AI 背景图上，保证格子可读）
-		for i in range(grid.size + 1):
-			var strong: bool = (i % 3 == 0)
-			var col := COLOR_GRID_STRONG if strong else COLOR_GRID
-			var w: float = 1.6 if strong else 1.0
+		# 稀疏网格：每 5 格一条淡线，标识战场边界与中线，不压过彩绘地图
+		for i in range(0, grid.size + 1, 5):
+			var is_border: bool = (i == 0 or i == grid.size or i == grid.size / 2)
+			var col := Color(0.45, 0.42, 0.38, 0.28 if is_border else 0.16)
+			var w: float = 2.0 if is_border else 1.0
 			draw_line(Vector2(i * TILE, 0), Vector2(i * TILE, W), col, w)
 			draw_line(Vector2(0, i * TILE), Vector2(W, i * TILE), col, w)
 		# 核心光晕（轻微，不遮挡背景细节）

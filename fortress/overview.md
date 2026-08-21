@@ -1,21 +1,18 @@
-# 末日堡垒 · 动态场景皮肤 + 相机缩放
+# 末日堡垒 · 彩绘大地图 + 入场运镜
 
 ## 本次改动
-- **战场尺度**：120×120 大地图，中央 100×100 敌方基地区域。
-- **动态背景皮肤**：接入 AI 生成的高质量俯视场景图，默认「末日碉堡（废墟城市）」，另有「废墟绿洲」「工业废城」两张变体；按 **B 键**循环切换。
-- **相机缩放/平移**：
-  - 鼠标滚轮上下：以鼠标指针为中心缩放；
-  - 触屏双指捏合：缩放（InputEventMagnifyGesture）；
-  - 右键拖拽：平移视角；
-  - `base_zoom` 随窗口尺寸自适应，乘 `zoom_level` 后限制在 0.02–10.0。
-- **BGLayer 调整**：移除程序化天空/山体/棋盘地面，改为只在 AI 背景图上绘制半透明网格线与核心光晕，保证格子可读又不遮挡美术。
+- **背景风格重做**：由写实城市废墟替换为「手绘彩绘战术地图」——整张地图像摊开的桌游版图，中央是平整战场空地，四周是山脉、河流、森林、罗盘、装饰边框。房间/城墙/部队像摆在沙盘上的棋子，视觉尺度协调。
+- **3 套动态皮肤**：默认「末日碉堡」+ 变体「森林战场」「废土沙漠」；按 **B 键**循环切换。
+- **网格稀疏化**：每 5 格一条淡线，只在边界/中线稍亮，不再密集成工程纸压过地图细节。
+- **镜头由远及近开场运镜**：启动后相机从远景（zoom = base_zoom × 0.55）用 Cubic Ease-Out 在 2 秒内慢慢拉近到战场；用户滚动/拖拽/下兵会立刻中断动画。
+- **保留交互**：鼠标滚轮以指针为中心缩放、触屏双指捏合缩放、右键拖拽平移。
 
-## 新增资源
+## 新增/替换资源
 | 文件 | 场景 |
 |------|------|
-| `assets/backgrounds/bg_bunker.png` | 默认：城市废墟 + 中央碉堡 |
-| `assets/backgrounds/bg_overgrown.png` | 变体：植被覆盖的废墟公园 |
-| `assets/backgrounds/bg_industrial.png` | 变体：工业废城 + 毒池 |
+| `assets/backgrounds/bg_bunker.png` | 默认：彩绘山地/河流/罗盘，中央平地 |
+| `assets/backgrounds/bg_forest.png` | 变体：森林/湖泊/花环边框，中央营地 |
+| `assets/backgrounds/bg_wasteland.png` | 变体：沙漠/遗迹/仙人掌/干河床 |
 
 > 注：AI 生成图右下角带有平台「AI生成」水印；当前接口无参数可彻底去除。如需无水印版本，可换用本地 SD / Midjourney 输出同名文件覆盖。
 
@@ -29,9 +26,13 @@ B end state=fail ticks=107 (期望 fail：兵尽)
 C total_shots=137 fire_ok=true
 VALIDATE_OK
 ```
-- 窗口模式 `--shot` 已确认：AI 背景铺满战场、网格叠加、中央碉堡/城墙/防御塔清晰可见。
+- 窗口模式 `--shot` 已确认：彩绘地图铺满战场、稀疏网格可读、中央碉堡/城墙/部队清晰可见。
 
 ## 关键文件
-- `main.gd`：新增 `bg_sprite`/`bg_paths`/`bg_index`、`_setup_background()`、`_set_background(idx)`、`_zoom_at()`、右键拖拽平移；BGLayer 改为仅绘制网格与核心光晕。
-- `assets/backgrounds/`：3 张 2048×2048 高质量俯视场景图及 `.import`。
+- `main.gd`：
+  - 替换 `bg_paths` 为 3 张彩绘地图；`_setup_background()` / `_set_background()` 不变。
+  - 新增 `_intro_camera()` 开场推镜、`_cancel_intro()` 用户交互中断。
+  - 调整 BGLayer 网格：每 5 格一条淡线，仅边界/中线加重。
+  - 保留 `_zoom_at()`、右键拖拽平移与 `--shot` 开发截图分支。
+- `assets/backgrounds/`：3 张 2048×2048 彩绘大地图及 `.import`。
 - `project.godot`：无需修改（已有窗口拉伸与最大化）。
