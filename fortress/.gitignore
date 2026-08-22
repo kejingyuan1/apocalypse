@@ -18,3 +18,7 @@ assets/backgrounds/gen/
 
 # 开发验证截图的 Godot 自动导入文件（截图本身可入库，但 .import 不存）
 screenshot_*.png.import
+
+# 启动脚本运行日志（play.bat 把 Godot 输出重定向到这里，不入库）
+godot_run.log
+godot_diag.log

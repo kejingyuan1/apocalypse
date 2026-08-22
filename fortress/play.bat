@@ -30,21 +30,29 @@ if not exist "%GODOT%" (
   exit /b 1
 )
 
+title 末日堡垒 - Apocalypse Fortress
+cls
+
 if "%~1"=="editor" (
   echo 正在打开 Godot 编辑器 ...
-  start "" "%GODOT%" --editor --path "%GAMEDIR%"
+  "%GODOT%" --editor --path "%GAMEDIR%" > "%GAMEDIR%\godot_run.log" 2>&1
   goto :eof
 )
 
 if "%~1"=="import" (
   echo 正在无头导入资源（首次克隆后执行一次即可） ...
-  "%GODOT%" --headless --editor --quit --path "%GAMEDIR%"
+  "%GODOT%" --headless --editor --quit --path "%GAMEDIR%" > "%GAMEDIR%\godot_run.log" 2>&1
   echo 导入完成。
   goto :eof
 )
 
 echo 正在启动《末日堡垒》...
-start "" "%GODOT%" --path "%GAMEDIR%"
-timeout /t 1 >nul
+REM 同步直接运行（不用 start，避免 cmd 对带引号路径+参数的解析坑导致拉不起 Godot）
+"%GODOT%" --path "%GAMEDIR%" > "%GAMEDIR%\godot_run.log" 2>&1
+if errorlevel 1 (
+  echo.
+  echo [错误] Godot 启动失败（退出码 %errorlevel%），详情见 godot_run.log
+  pause
+)
 
 endlocal
