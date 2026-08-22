@@ -12,3 +12,9 @@ __pycache__/
 
 # 已被 assets/art/ 取代的早期占位图目录（本地残留，不入库）
 assets/sprites/
+
+# 背景图生成过程中的临时原图（已裁剪后的成品入库）
+assets/backgrounds/gen/
+
+# 开发验证截图的 Godot 自动导入文件（截图本身可入库，但 .import 不存）
+screenshot_*.png.import

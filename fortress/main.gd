@@ -101,8 +101,7 @@ var unit_layer: Node2D
 var fx_layer: FXLayer
 var weather_layer: WeatherLayer
 var weather_overlay: WeatherOverlay
-var bg_canvas: CanvasLayer
-var bg_rect: TextureRect
+var bg_sprite: Sprite2D
 var bg_paths: Array = [
 	"res://assets/backgrounds/bg_wasteland_new.png",
 	"res://assets/backgrounds/bg_bunker.png",
@@ -119,6 +118,8 @@ var screen_shake: float = 0.0
 var turret_aim: Dictionary = {}
 var turret_targets: Dictionary = {}
 var turret_flash: Dictionary = {}
+var hovered_room_id: int = -1
+var last_hovered_room_id: int = -1
 var room_flash: Dictionary = {}
 var core_flash: float = 0.0
 var prev_unit_ids: Dictionary = {}
@@ -179,10 +180,14 @@ func _rezoom() -> void:
 	if camera == null:
 		return
 	var vp: Vector2 = get_viewport_rect().size
-	var world_px: float = float(grid.size) * TILE
+	# 默认聚焦在真实基地（城墙 + 内部建筑）并留少量外围废土边距，
+	# 使房间在不同分辨率下都清晰可见；玩家可滚轮缩放查看全局战场。
+	var margin_tiles: int = 10
+	var focus_tiles: float = float(BattleSim.WALL_HALF * 2 + margin_tiles * 2)
+	var focus_px: float = focus_tiles * TILE
 	var avail_w: float = max(vp.x - 32.0, 100.0)
 	var avail_h: float = max(vp.y - HUD_TOP - HUD_BOTTOM, 100.0)
-	base_zoom = clampf(min(avail_w, avail_h) / world_px, 0.02, 10.0)
+	base_zoom = clampf(min(avail_w, avail_h) / focus_px, 0.02, 10.0)
 	_apply_zoom()
 
 func _apply_zoom() -> void:
@@ -209,17 +214,11 @@ func _cancel_intro() -> void:
 
 # ===================== 背景皮肤 =====================
 func _setup_background() -> void:
-	bg_canvas = CanvasLayer.new()
-	bg_canvas.layer = -100
-	add_child(bg_canvas)
-	bg_rect = TextureRect.new()
-	bg_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bg_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	bg_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	bg_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	bg_rect.z_as_relative = false
-	bg_rect.z_index = -100
-	bg_canvas.add_child(bg_rect)
+	bg_sprite = Sprite2D.new()
+	bg_sprite.z_as_relative = false
+	bg_sprite.z_index = -10
+	bg_sprite.centered = true
+	add_child(bg_sprite)
 	_set_background(bg_index)
 
 func _set_background(idx: int) -> void:
@@ -227,7 +226,12 @@ func _set_background(idx: int) -> void:
 	var tex := load(bg_paths[bg_index]) as Texture2D
 	if tex == null:
 		return
-	bg_rect.texture = tex
+	bg_sprite.texture = tex
+	var world_px: float = float(grid.size) * TILE
+	# 等比缩放：按背景图高度覆盖整个战场高度，宽度自然超出，保持 16:9 不拉伸
+	var scale: float = world_px / tex.get_height()
+	bg_sprite.scale = Vector2(scale, scale)
+	bg_sprite.position = _grid_center_world()
 
 func _cycle_weather() -> void:
 	var states: Array = ["clear", "rain", "snow"]
@@ -245,6 +249,9 @@ func _input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
 				_cancel_intro()
+				_update_hovered_room()
+				if hovered_room_id >= 0:
+					_on_room_click(hovered_room_id)
 				var c: Vector2i = world_to_cell(get_global_mouse_position())
 				if game_mode == "editor":
 					_editor_place(c)
@@ -276,6 +283,7 @@ func _input(event: InputEvent) -> void:
 			else:
 				_panning = false
 	elif event is InputEventMouseMotion:
+		_update_hovered_room()
 		if _panning:
 			camera.position = _cam_start - (get_global_mouse_position() - _pan_start) / camera.zoom
 		elif drag_deploying and game_mode == "attack":
@@ -316,6 +324,52 @@ func _zoom_at(world_p: Vector2, factor: float) -> void:
 	var new_z: float = base_zoom * zoom_level
 	camera.position = world_p + (camera.position - world_p) * (old_z / new_z)
 	_apply_zoom()
+
+func _update_hovered_room() -> void:
+	if camera == null or grid == null:
+		_set_room_hover(-1)
+		hovered_room_id = -1
+		return
+	var cell: Vector2i = world_to_cell(get_global_mouse_position())
+	var id: int = grid.occupied.get(cell, -1)
+	if id != hovered_room_id:
+		_set_room_hover(id)
+		hovered_room_id = id
+
+func _set_room_hover(id: int) -> void:
+	# 取消上一个房间的高亮
+	if last_hovered_room_id >= 0:
+		if room_sprites.has(last_hovered_room_id):
+			room_sprites[last_hovered_room_id].modulate = Color(1.0, 1.0, 1.0)
+		elif turret_nodes.has(last_hovered_room_id):
+			turret_nodes[last_hovered_room_id].base.modulate = Color(1.0, 1.0, 1.0)
+	last_hovered_room_id = id
+	# 高亮当前房间
+	if id >= 0:
+		if room_sprites.has(id):
+			room_sprites[id].modulate = Color(1.18, 1.18, 1.18)
+		elif turret_nodes.has(id):
+			turret_nodes[id].base.modulate = Color(1.18, 1.18, 1.18)
+
+func _on_room_click(id: int) -> void:
+	if not grid.rooms.has(id):
+		return
+	var r: Dictionary = grid.rooms[id]
+	var rc: Vector2 = _room_center_world(r)
+	# 点击反馈：白光闪烁 + 少量火花
+	_spawn_hit_flash(rc, Color(1.0, 0.95, 0.8), 0.4)
+	_spawn_spark(rc, Color(1.0, 0.9, 0.5), 0.3)
+	# 建筑轻微"弹跳"：通过临时缩放动画实现
+	if room_sprites.has(id):
+		var sp: AnimatedSprite2D = room_sprites[id]
+		var tw := create_tween()
+		tw.tween_property(sp, "scale", Vector2(1.08, 1.08), 0.06)
+		tw.tween_property(sp, "scale", Vector2(1.0, 1.0), 0.12)
+	elif turret_nodes.has(id):
+		var base: AnimatedSprite2D = turret_nodes[id].base
+		var tw := create_tween()
+		tw.tween_property(base, "scale", Vector2(1.06, 1.06), 0.06)
+		tw.tween_property(base, "scale", Vector2(1.0, 1.0), 0.12)
 
 func world_to_cell(p: Vector2) -> Vector2i:
 	return Vector2i(floor(p.x / TILE), floor(p.y / TILE))
@@ -958,13 +1012,12 @@ func _dev_shot_setup() -> void:
 		while sim.army[k] > 0 and ci < cells.size():
 			if sim.deploy(k, cells[ci]):
 				ci += 1
-	for i in range(60):
+	# 只推进少量 tick 让单位动画开始，避免 COMMAND 在截图前被摧毁
+	for i in range(5):
 		sim.tick()
 		_consume_sim_events()
 		_detect_state_changes()
 		_sync_units()
-		if sim.state != "combat":
-			break
 	RenderingServer.viewport_set_update_mode(get_viewport().get_viewport_rid(), RenderingServer.VIEWPORT_UPDATE_ALWAYS)
 	_shot_pending = true
 
@@ -1076,6 +1129,9 @@ class WeatherOverlay extends CanvasLayer:
 		sun.draw_circle(Vector2(cx - 5, cy - 5), r * 0.22, Color(1.0, 1.0, 0.9, 0.65))
 
 	func _draw_watermark_blend() -> void:
+		# 新背景图已使用右侧留黑+裁剪方案完全去除水印，不再需要额外覆盖层。
+		# 彻底关闭此绘制，避免右下角出现褐色污渍。
+		return
 		var vp: Vector2 = watermark_blend.get_viewport_rect().size
 		var band_h: float = 260.0
 		var y0: float = vp.y - band_h - BOTTOM_H

@@ -215,21 +215,45 @@ function drawZombie(b, f, base, kind) {
 }
 
 // 防御塔：拆成「底座」+「炮管」。底座不旋转；炮管单独精灵，由程序旋转。
+// 防御塔阵地 3x3：沙袋围成的碉堡，带中央转台、雷达、弹药箱
 function drawTurretBase(b) {
-  const cx = FRAME/2, cy = FRAME/2+4;
-  b.ellipse(cx, 56, 17, 5, C(0,0,0,80));
-  // 厚重底座
-  b.circle(cx, cy, 23, C(60,66,74));
-  b.circle(cx, cy, 19, C(86,94,104));
-  b.circle(cx, cy, 15, C(64,70,78));
-  // 旋转轴凹槽
-  b.circle(cx, cy, 8, C(44,50,58));
-  b.circle(cx, cy, 4, C(120,200,255,200));
-  // 螺栓细节
-  for (const [bx,by] of [[cx-14,cy-10],[cx+14,cy-10],[cx-14,cy+10],[cx+14,cy+10]]) {
-    b.circle(bx, by, 2, C(40,44,48));
-    b.circle(bx, by, 1, C(70,76,84));
+  const w = b.w, h = b.h, cx = w/2, cy = h/2;
+  // 沙袋围墙（四角和四边）
+  const sand = C(115, 105, 80);
+  const sandDark = C(82, 75, 58);
+  // 四边沙袋
+  for (let i=0; i<6; i++) {
+    const sx = 14 + i*28;
+    b.ellipse(sx, 14, 12, 7, sandDark); b.ellipse(sx, 12, 12, 7, sand);
+    b.ellipse(sx, h-14, 12, 7, sandDark); b.ellipse(sx, h-12, 12, 7, sand);
   }
+  for (let i=0; i<4; i++) {
+    const sy = 24 + i*32;
+    b.ellipse(14, sy, 7, 12, sandDark); b.ellipse(12, sy, 7, 12, sand);
+    b.ellipse(w-14, sy, 7, 12, sandDark); b.ellipse(w-12, sy, 7, 12, sand);
+  }
+  // 中央混凝土地基
+  b.circle(cx, cy, 46, C(45, 48, 52));
+  b.circle(cx, cy, 38, C(68, 72, 78));
+  // 旋转轴凹槽（炮管底座）
+  b.circle(cx, cy, 18, C(44, 50, 58));
+  b.circle(cx, cy, 10, C(120, 200, 255, 180));
+  // 后方雷达（带旋转条纹）
+  const rx = w*0.76, ry = h*0.26;
+  b.rrect(rx-10, ry-14, 20, 28, 3, C(70, 75, 82));
+  b.circle(rx, ry-16, 8, C(80, 85, 92));
+  b.line(rx-14, ry-16, rx+14, ry-16, C(60, 200, 120), 2);
+  // 左侧弹药箱
+  const ax = w*0.18, ay = h*0.72;
+  for (let i=0; i<3; i++) {
+    b.rrect(ax + i*14, ay - i*6, 14, 12, 2, C(95, 90, 78));
+    b.line(ax + i*14 + 2, ay - i*6 + 6, ax + i*14 + 12, ay - i*6 + 6, C(70, 66, 58), 1);
+  }
+  // 右侧油桶
+  const bx = w*0.82, by = h*0.70;
+  b.ellipse(bx, by+12, 10, 4, C(0,0,0,80));
+  b.rrect(bx-8, by-14, 16, 28, 3, C(95, 75, 55));
+  b.line(bx-8, by-4, bx+8, by-4, C(70, 55, 40), 2);
 }
 
 function drawTurretBarrel(b, fireFrame) {
@@ -251,44 +275,94 @@ function drawTurretBarrel(b, fireFrame) {
   }
 }
 
-// 核心/指挥：脉动 + 内部旋转
+// 核心/指挥 4x4：《辐射》避难所式指挥中心，带全息作战桌、电脑、椅子和脉动核心
 function drawCore(b, f) {
-  const cx = FRAME/2, cy = FRAME/2;
+  const w = b.w, h = b.h, cx = w/2, cy = h/2;
   const pulse = 0.5 + 0.5*Math.sin(f/4*Math.PI*2);
-  b.ellipse(cx, 58, 18, 5, C(0,0,0,70));
-  // 外发光
-  b.circle(cx, cy, 26 + pulse*4, C(235,150,60, 40+pulse*30));
-  b.circle(cx, cy, 22, C(60,46,38));
-  b.rrect(cx-18, cy-18, 36, 36, 8, C(120,84,52));
-  b.rrect(cx-15, cy-15, 30, 30, 6, C(170,110,60));
-  // 内部旋转核心（六角）
+  // 外墙与地板
+  b.rrect(4, 4, w-8, h-8, 6, C(82, 78, 72));
+  b.rrect(8, 8, w-16, h-16, 4, C(58, 56, 52));
+  // 地砖网格
+  for (let i=1;i<4;i++) {
+    b.line(8 + i*(w-16)/4, 8, 8 + i*(w-16)/4, h-8, C(45, 43, 40), 1);
+    b.line(8, 8 + i*(h-16)/4, w-8, 8 + i*(h-16)/4, C(45, 43, 40), 1);
+  }
+  // 中央全息作战桌（闪烁）
+  const tblW = (w-16)*0.55, tblH = (h-16)*0.35;
+  b.ellipse(cx, cy + tblH*0.45, tblW*0.45, tblH*0.25, C(0,0,0,90));
+  b.rrect(cx - tblW/2, cy - tblH/2, tblW, tblH, 6, C(55, 70, 85));
+  b.rrect(cx - tblW/2 + 4, cy - tblH/2 + 4, tblW - 8, tblH - 8, 4, C(40, 55, 70));
+  // 全息投影：旋转的战场扇区
   const spin = f/4*Math.PI*2;
-  const pts = [];
-  for (let i=0;i<6;i++){ const a=spin+i/6*Math.PI*2; pts.push([cx+Math.cos(a)*10, cy+Math.sin(a)*10]); }
-  b.tri(pts[0][0],pts[0][1],pts[1][0],pts[1][1],pts[2][0],pts[2][1], C(255,200,110));
-  b.tri(pts[2][0],pts[2][1],pts[3][0],pts[3][1],pts[4][0],pts[4][1], C(255,200,110));
-  b.tri(pts[4][0],pts[4][1],pts[5][0],pts[5][1],pts[0][0],pts[0][1], C(255,200,110));
-  b.circle(cx, cy, 5+pulse*2, C(255,245,210,255));
+  for (let i=0;i<3;i++) {
+    const a1 = spin + i*Math.PI*2/3;
+    const a2 = a1 + Math.PI/3;
+    const r = tblH*0.28;
+    const x1 = cx + Math.cos(a1)*r, y1 = cy + Math.sin(a1)*r*0.6;
+    const x2 = cx + Math.cos(a2)*r, y2 = cy + Math.sin(a2)*r*0.6;
+    b.tri(cx, cy, x1, y1, x2, y2, C(120, 200, 255, 90 + pulse*60));
+  }
+  b.circle(cx, cy, 6 + pulse*3, C(160, 220, 255, 140 + pulse*80));
+  // 四台电脑（角落，屏幕闪烁）
+  const screenGlow = 120 + pulse*80;
+  const corners = [[14,14], [w-34,14], [14,h-34], [w-34,h-34]];
+  for (const [rx, ry] of corners) {
+    b.rrect(rx, ry, 24, 18, 3, C(65, 62, 58));
+    b.rrect(rx+3, ry+3, 18, 10, 2, C(screenGlow*0.4, screenGlow*0.55, screenGlow*0.7));
+    // 屏幕内容线
+    b.line(rx+5, ry+6, rx+18, ry+6, C(180, 210, 230, 180), 1);
+    b.line(rx+5, ry+9, rx+14, ry+9, C(180, 210, 230, 180), 1);
+    // 椅子
+    b.rrect(rx+6, ry+20, 12, 8, 2, C(90, 55, 45));
+  }
+  // 顶部 status 灯带
+  for (let i=0;i<5;i++) {
+    const lx = cx - 40 + i*20;
+    const on = (i + f) % 5 < 2;
+    b.circle(lx, 16, 4, on ? C(255, 80, 60) : C(80, 70, 65));
+  }
 }
 
-// 生产房：齿轮旋转 + 烟囱冒烟
+// 生产/储藏房 3x2：《辐射》式车间/储藏室，带货架、桶、工作台、转动齿轮与蒸汽
 function drawProduction(b, f) {
-  const cx = FRAME/2, cy = FRAME/2+6;
-  b.ellipse(cx, 58, 20, 5, C(0,0,0,70));
-  b.rrect(cx-22, cy-14, 44, 30, 5, C(70,66,60));
-  b.rrect(cx-20, cy-12, 40, 26, 4, C(150,120,80));
-  b.rrect(cx-20, cy-12, 40, 8, 3, C(180,150,100)); // 顶高光
-  // 烟囱
-  b.rrect(cx+12, cy-26, 8, 14, 2, C(60,58,56));
-  // 冒烟（按帧上升）
-  const smokeY = cy-26 - ((f*6) % 24);
-  b.circle(cx+16, smokeY, 4+ (f%2), C(180,180,185,150));
-  b.circle(cx+18, smokeY-8, 3, C(160,160,165,110));
-  // 齿轮（旋转）
+  const w = b.w, h = b.h, cx = w/2, cy = h/2;
+  // 外墙与地板
+  b.rrect(4, 4, w-8, h-8, 5, C(78, 74, 66));
+  b.rrect(8, 8, w-16, h-16, 3, C(52, 50, 46));
+  // 左侧货架（储藏室特征）
+  for (let row=0; row<3; row++) {
+    const y = 14 + row*22;
+    b.line(14, y, 14 + w*0.38, y, C(95, 88, 78), 3);
+    for (let item=0; item<4; item++) {
+      const ix = 18 + item*16;
+      const boxCol = (item + row) % 2 === 0 ? C(110, 95, 70) : C(90, 82, 72);
+      b.rrect(ix, y - 14, 12, 12, 2, boxCol);
+    }
+  }
+  // 右侧工作台
+  const wx = w*0.58, wy = h*0.35;
+  b.rrect(wx, wy, w*0.34, h*0.45, 3, C(85, 78, 68));
+  // 台面上工具
+  b.circle(wx + 16, wy + 12, 7, C(120, 120, 125)); // 盘子/仪表
+  b.circle(wx + 16, wy + 12, 3, C(80, 200, 120, 160)); // 绿灯
+  b.rrect(wx + 32, wy + 6, 16, 8, 2, C(100, 95, 88)); // 工具箱
+  // 地面大齿轮（旋转动画）
+  const gx = w*0.62, gy = h*0.72, gr = 18;
   const a = f/4*Math.PI*2;
-  for (let i=0;i<6;i++){ const ang=a+i/6*Math.PI*2; b.line(cx-12, cy+2, cx-12+Math.cos(ang)*7, cy+2+Math.sin(ang)*7, C(110,90,60), 3); }
-  b.circle(cx-12, cy+2, 6, C(130,105,70));
-  b.circle(cx-12, cy+2, 2.5, C(80,64,44));
+  for (let i=0;i<8;i++) {
+    const ang = a + i*Math.PI*2/8;
+    b.line(gx, gy, gx + Math.cos(ang)*gr, gy + Math.sin(ang)*gr, C(95, 85, 70), 4);
+  }
+  b.circle(gx, gy, 8, C(75, 68, 58));
+  b.circle(gx, gy, 3, C(45, 42, 38));
+  // 蒸汽/烟雾（帧动画上升）
+  const smokeY = 12 - ((f*8) % 28);
+  b.circle(w*0.82, smokeY + 18, 5 + (f%2), C(180, 180, 185, 130));
+  b.circle(w*0.85, smokeY + 6, 4, C(160, 160, 165, 100));
+  // 桶
+  b.ellipse(w*0.25, h - 14, 10, 5, C(0,0,0,80));
+  b.rrect(w*0.25 - 8, h - 34, 16, 22, 3, C(90, 85, 75));
+  b.line(w*0.25 - 8, h - 28, w*0.25 + 8, h - 28, C(70, 66, 58), 2);
 }
 
 // 墙：4 个等级，每级 2 帧（完好/破损）。level=0..3
@@ -356,17 +430,17 @@ function drawBullet(b) {
 }
 
 // ---------- 输出精灵表 ----------
-function sheet(name, cols, drawFn) {
-  console.error(`[sheet] ${name} start (cols=${cols})`);
-  const w = FRAME*cols, h = FRAME;
+function sheet(name, cols, drawFn, fw=FRAME, fh=FRAME) {
+  console.error(`[sheet] ${name} start (cols=${cols}, frame=${fw}x${fh})`);
+  const w = fw*cols, h = fh;
   const b = new Buf(w, h);
   for (let c=0;c<cols;c++) {
-    const nb = new Buf(FRAME, FRAME);
-    drawFn(nb, c);                  // 单帧画在 nb（坐标 0..FRAME）
-    for (let y=0;y<FRAME;y++) {     // 逐行拼接到主表第 c 列
-      const src = y*FRAME*4;
-      const dst = (y*cols + c)*FRAME*4;
-      b.d.set(nb.d.subarray(src, src+FRAME*4), dst);
+    const nb = new Buf(fw, fh);
+    drawFn(nb, c);                  // 单帧画在 nb（坐标 0..fw/fh）
+    for (let y=0;y<fh;y++) {        // 逐行拼接到主表第 c 列
+      const src = y*fw*4;
+      const dst = (y*cols + c)*fw*4;
+      b.d.set(nb.d.subarray(src, src+fw*4), dst);
     }
   }
   console.error(`[sheet] ${name} drew, encoding...`);
@@ -382,10 +456,11 @@ console.log('生成末日堡垒精灵表...');
 sheet('zombie_walker', 4, (b,f)=>drawZombie(b,f,C(150,180,90),'walker'));
 sheet('zombie_runner', 4, (b,f)=>drawZombie(b,f,C(200,80,70),'runner'));
 sheet('zombie_spitter',4, (b,f)=>drawZombie(b,f,C(170,90,190),'spitter'));
-sheet('turret_base',  1, (b,f)=>drawTurretBase(b));
+// 房间精灵尺寸与 RoomDefs.size() 对应（TILE=64）：command 4x4=256x256, production 3x2=192x128, defense 3x3=192x192
+sheet('turret_base',  1, (b,f)=>drawTurretBase(b), 192, 192);
 sheet('turret_barrel', 4, (b,f)=>drawTurretBarrel(b,f));
-sheet('core', 4, (b,f)=>drawCore(b,f));
-sheet('production', 4, (b,f)=>drawProduction(b,f));
+sheet('core', 4, (b,f)=>drawCore(b,f), 256, 256);
+sheet('production', 4, (b,f)=>drawProduction(b,f), 192, 128);
 sheet('wall', 8, (b,f)=>drawWall(b, f));
 sheet('bullet', 1, (b)=>drawBullet(b));
 console.log('完成 ->', OUT);

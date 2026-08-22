@@ -5,15 +5,14 @@ extends RefCounted
 # 房间类型定义（对齐《建造系统 GDD》§7 面积矩阵）
 enum Type { WALL, DEFENSE, PRODUCTION, COMMAND }
 
-# 面积（格）：城墙1x1 / 防御1x1（炮塔） / 生产2x1 / 指挥2x2
-# 注：原 GDD 矩阵（指挥4x4 / 防御3x3 / 生产3x2）与 Lv1=6 网格几何冲突（放不下任何防御/生产房），
-# 故缩小为可放进 6×6 初始网格的尺寸，保留概念 intent。
+# 面积（格）：城墙1x1 / 防御3x3（炮塔阵地） / 生产3x2（储藏/车间） / 指挥4x4（控制中心）
+# 120×120 大地图可容纳更大建筑，恢复 GDD 原意并增强《辐射》避难所式辨识度。
 static func size(type: int) -> Vector2i:
 	match type:
 		Type.WALL: return Vector2i(1, 1)
-		Type.DEFENSE: return Vector2i(1, 1)
-		Type.PRODUCTION: return Vector2i(2, 1)
-		Type.COMMAND: return Vector2i(2, 2)
+		Type.DEFENSE: return Vector2i(3, 3)
+		Type.PRODUCTION: return Vector2i(3, 2)
+		Type.COMMAND: return Vector2i(4, 4)
 	return Vector2i(1, 1)
 
 # 承伤 HP：城墙为 COC 式高血量阻挡（需破墙），其余对照原设计

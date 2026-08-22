@@ -58,18 +58,18 @@ func _init(g: GridModel) -> void:
 # 基地占据 BASE_REGION(100) 居中区域。进攻时若玩家已保存布局则加载，否则使用此默认非城墙布局。
 func _build_enemy_base() -> void:
 	var mid: int = BASE_OFFSET + int(BASE_REGION / 2)   # 60（基地区域中心）
-	# 核心 2x2，正中
-	core_id = grid.place(RoomDefs.Type.COMMAND, Vector2i(mid - 1, mid - 1))
-	# 防御塔：核心四角保护
-	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid - 6, mid - 6))
-	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid + 5, mid - 6))
-	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid - 6, mid + 5))
-	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid + 5, mid + 5))
-	# 生产房：核心四边中点
-	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid - 1, mid - 6))
-	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid - 1, mid + 5))
-	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid - 6, mid - 1))
-	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid + 5, mid - 1))
+	# 核心 4x4，正中
+	core_id = grid.place(RoomDefs.Type.COMMAND, Vector2i(mid - 2, mid - 2))
+	# 防御塔 3x3：核心四角保护
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid - 10, mid - 10))
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid + 7, mid - 10))
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid - 10, mid + 7))
+	grid.place(RoomDefs.Type.DEFENSE, Vector2i(mid + 7, mid + 7))
+	# 生产房 3x2：核心四边中点
+	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid - 1, mid - 9))
+	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid - 1, mid + 7))
+	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid - 9, mid - 1))
+	grid.place(RoomDefs.Type.PRODUCTION, Vector2i(mid + 7, mid - 1))
 	# 标记笼罩范围：每个房间外扩 1 格禁止敌方下兵（COC 式建筑保护范围）
 	_rebuild_deploy_blocked()
 
