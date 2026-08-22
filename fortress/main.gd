@@ -775,13 +775,15 @@ func _make_turret_barrel_frames() -> SpriteFrames:
 		return _frames_cache[key]
 	var cfg = TURRET_BARREL_SHEET
 	var tex := load(cfg.path) as Texture2D
+	var fw: int = tex.get_width() / cfg.frames
+	var fh: int = tex.get_height()
 	var sf := SpriteFrames.new()
 	sf.add_animation("idle")
 	sf.set_animation_speed("idle", 1.0)
 	sf.set_animation_loop("idle", true)
 	var at0 := AtlasTexture.new()
 	at0.atlas = tex
-	at0.region = Rect2(0, 0, SPRITE_SIZE, SPRITE_SIZE)
+	at0.region = Rect2(0, 0, fw, fh)
 	sf.add_frame("idle", at0)
 	sf.add_animation("fire")
 	sf.set_animation_speed("fire", cfg.fps)
@@ -789,7 +791,7 @@ func _make_turret_barrel_frames() -> SpriteFrames:
 	for i: int in range(cfg.frames):
 		var at := AtlasTexture.new()
 		at.atlas = tex
-		at.region = Rect2(i * SPRITE_SIZE, 0, SPRITE_SIZE, SPRITE_SIZE)
+		at.region = Rect2(i * fw, 0, fw, fh)
 		sf.add_frame("fire", at)
 	_frames_cache[key] = sf
 	return sf
@@ -807,9 +809,11 @@ func _sync_rooms() -> void:
 				base.sprite_frames = _make_turret_base_frames()
 				base.play("base")
 				base.position = center
+				base.scale = Vector2(0.35, 0.35)
 				var barrel := AnimatedSprite2D.new()
 				barrel.sprite_frames = _make_turret_barrel_frames()
 				barrel.play("idle")
+				barrel.scale = Vector2(0.35, 0.35)
 				barrel.animation_finished.connect(func(): _on_barrel_finished(id))
 				pivot.add_child(barrel)
 				unit_layer.add_child(base)
@@ -828,6 +832,11 @@ func _sync_rooms() -> void:
 				sp.sprite_frames = _make_frames(cfg.path, cfg.anim, cfg.frames, cfg.fps, true)
 				sp.play(cfg.anim)
 				sp.position = center
+				match type:
+					RoomDefs.Type.PRODUCTION:
+						sp.scale = Vector2(0.25, 0.25)
+					RoomDefs.Type.COMMAND:
+						sp.scale = Vector2(0.5, 0.5)
 				# 城墙改用 BGLayer 无缝绘制 + FXLayer 发光流动，原精灵隐藏避免双边框缝隙
 				if type == RoomDefs.Type.WALL:
 					sp.visible = false
@@ -868,6 +877,7 @@ func _sync_units() -> void:
 			var path: String = ZOMBIE_SHEETS.get(z.kind, ZOMBIE_SHEETS[Zombie.Kind.WALKER])
 			sp.sprite_frames = _make_frames(path, "walk", 4, 7.0, true)
 			sp.play("walk")
+			sp.scale = Vector2(0.15, 0.15)
 			unit_layer.add_child(sp)
 			unit_sprites[z.id] = sp
 		var p: Vector2 = z.prev_pos.lerp(z.pos, alpha)
@@ -1319,26 +1329,21 @@ class BGLayer extends Node2D:
 			return
 		var pad: float = 1.0
 		var border_col := Color(0.22, 0.20, 0.18, 0.92)
-		var highlight_col := Color(1.0, 1.0, 1.0, 0.16)
+		var wall_tex: Texture2D = load("res://assets/sheets/wall.png") as Texture2D
 		for c: Vector2i in wall_cells:
 			var lv: int = wall_cells[c]
 			var base: Color = RoomDefs.wall_color(lv)
 			var x: float = c.x * TILE - pad
 			var y: float = c.y * TILE - pad
 			var sz: float = TILE + pad * 2.0
-			# 无缝填充：相邻格子的矩形会轻微重叠，消除缝隙
-			draw_rect(Rect2(x, y, sz, sz), base)
-			# 顶部高光带
-			draw_rect(Rect2(x, y, sz, 3.0), Color(base.r + 0.07, base.g + 0.07, base.b + 0.07, 0.45))
-			# 左部高光带
-			draw_rect(Rect2(x, y, 3.0, sz), Color(base.r + 0.05, base.g + 0.05, base.b + 0.05, 0.35))
-			# 底部/右侧阴影
-			draw_rect(Rect2(x + sz - 3.0, y, 3.0, sz), Color(0.0, 0.0, 0.0, 0.22))
-			draw_rect(Rect2(x, y + sz - 3.0, sz, 3.0), Color(0.0, 0.0, 0.0, 0.22))
-			# 铆钉细节（增强砖石质感）
-			var rivet: Color = Color(base.r * 0.75, base.g * 0.75, base.b * 0.75, 0.5)
-			draw_circle(Vector2(x + sz * 0.25, y + sz * 0.28), 2.0, rivet)
-			draw_circle(Vector2(x + sz * 0.75, y + sz * 0.72), 2.0, rivet)
+			# 用 AI 生成的无缝城墙贴图填充每格；相邻格子使用同一张对齐纹理，天然连成整体
+			var mod: Color = Color.WHITE.lerp(base, 0.22)
+			draw_texture_rect(wall_tex, Rect2(x, y, sz, sz), false, mod)
+			# 细微程序高光/阴影，增强体积感但不遮挡贴图细节
+			draw_rect(Rect2(x, y, sz, 2.0), Color(1.0, 1.0, 1.0, 0.18))
+			draw_rect(Rect2(x, y, 2.0, sz), Color(1.0, 1.0, 1.0, 0.12))
+			draw_rect(Rect2(x + sz - 2.0, y, 2.0, sz), Color(0.0, 0.0, 0.0, 0.14))
+			draw_rect(Rect2(x, y + sz - 2.0, sz, 2.0), Color(0.0, 0.0, 0.0, 0.14))
 		# 外边框：只在四邻不是城墙的边绘制，连续城墙内部无缝
 		for c: Vector2i in wall_cells:
 			var x0: float = c.x * TILE
@@ -1557,7 +1562,8 @@ class FXLayer extends Node2D:
 			return
 		var t: float = main.anim_time
 		# 能量流动：沿相邻城墙之间的公共边，从中心向中心移动的发光虚线
-		var flow_col := Color(1.0, 0.92, 0.55, 0.9)
+		# 等级越高，流动光越金黄/橙红，强化 COC 式升级反馈
+		var flow_col := Color(1.0, 0.95, 0.42, 0.95)
 		var dirs: Array[Vector2i] = [Vector2i(1, 0), Vector2i(0, 1)]
 		for c: Vector2i in wall_cells:
 			for d: Vector2i in dirs:
@@ -1568,10 +1574,15 @@ class FXLayer extends Node2D:
 				var p1: Vector2 = (Vector2(n.x, n.y) + Vector2(0.5, 0.5)) * TILE
 				var dist: float = p0.distance_to(p1)
 				var along: Vector2 = (p1 - p0).normalized()
-				var seg_len: float = 7.0
+				var seg_len: float = 8.0
 				var gap_len: float = 5.0
-				var phase: float = fmod(t * 22.0, seg_len + gap_len)
+				var phase: float = fmod(t * 24.0, seg_len + gap_len)
 				var count: int = int(dist / (seg_len + gap_len)) + 2
+				var max_lv: int = maxi(cell_level.get(c, 0), cell_level.get(n, 0))
+				match max_lv:
+					1: flow_col = Color(1.0, 0.95, 0.42, 0.95)
+					2: flow_col = Color(1.0, 0.88, 0.28, 0.95)
+					3: flow_col = Color(1.0, 0.72, 0.18, 0.95)
 				for i: int in range(count):
 					var base_d: float = i * (seg_len + gap_len) + phase
 					if base_d > dist:
@@ -1583,8 +1594,8 @@ class FXLayer extends Node2D:
 					var a: Vector2 = p0 + along * start_d
 					var b: Vector2 = p0 + along * end_d
 					var pulse: float = 0.65 + 0.35 * sin(t * 3.5 + i * 0.8)
-					draw_line(a, b, Color(flow_col.r, flow_col.g, flow_col.b, flow_col.a * pulse), 2.8)
-		# 升级发光：等级 > 0 的城墙单元绘制脉冲高光
+					draw_line(a, b, Color(flow_col.r, flow_col.g, flow_col.b, flow_col.a * pulse), 3.2)
+		# 升级发光：等级 > 0 的城墙单元绘制强脉冲高光，让升级后的墙明显"亮"起来
 		for c: Vector2i in wall_cells:
 			var lv: int = cell_level.get(c, 0)
 			if lv <= 0:
@@ -1592,18 +1603,18 @@ class FXLayer extends Node2D:
 			var center: Vector2 = (Vector2(c.x, c.y) + Vector2(0.5, 0.5)) * TILE
 			var glow: Color
 			match lv:
-				1: glow = Color(1.0, 0.9, 0.45, 0.28)
-				2: glow = Color(1.0, 0.82, 0.28, 0.38)
-				3: glow = Color(1.0, 0.72, 0.18, 0.48)
-			var pulse: float = 0.85 + 0.15 * sin(t * 4.2 + c.x * 0.6 + c.y * 0.6)
+				1: glow = Color(1.0, 0.92, 0.45, 0.38)
+				2: glow = Color(1.0, 0.85, 0.28, 0.48)
+				3: glow = Color(1.0, 0.72, 0.18, 0.58)
+			var pulse: float = 0.8 + 0.2 * sin(t * 4.2 + c.x * 0.6 + c.y * 0.6)
 			# 外发光晕
-			for r: int in range(3, 0, -1):
-				var rr: float = TILE * (0.52 + (3 - r) * 0.1)
-				var a: float = glow.a * pulse * (float(r) / 3.0) * 0.4
+			for r: int in range(4, 0, -1):
+				var rr: float = TILE * (0.45 + (4 - r) * 0.11)
+				var a: float = glow.a * pulse * (float(r) / 4.0) * 0.5
 				draw_circle(center, rr, Color(glow.r, glow.g, glow.b, a))
 			# 亮边
 			var rect := Rect2(c.x * TILE + 2.5, c.y * TILE + 2.5, TILE - 5.0, TILE - 5.0)
-			draw_rect(rect, Color(glow.r, glow.g, glow.b, glow.a * pulse * 0.75))
+			draw_rect(rect, Color(glow.r, glow.g, glow.b, glow.a * pulse * 0.85))
 
 
 # ===================== 环境动态层：游荡僵尸、飞鸟 =====================
