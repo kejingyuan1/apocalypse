@@ -12,6 +12,9 @@ setlocal
 
 REM 项目目录 = 本脚本所在目录
 set "GAMEDIR=%~dp0"
+REM 去掉末尾反斜杠：否则 "--path "路径\"" 中末尾 \" 会被 cmd 误判为转义引号，
+REM 导致 Godot 收不到正确的项目目录而启动即退出（表现为双击闪退）
+if "%GAMEDIR:~-1%"=="\" set "GAMEDIR=%GAMEDIR:~0,-1%"
 
 REM Godot 可执行文件（默认路径，可用环境变量覆盖）
 if defined GODOT_EXE (set "GODOT=%GODOT_EXE%") else (
@@ -42,5 +45,6 @@ if "%~1"=="import" (
 
 echo 正在启动《末日堡垒》...
 start "" "%GODOT%" --path "%GAMEDIR%"
+timeout /t 1 >nul
 
 endlocal
