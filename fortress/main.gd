@@ -102,11 +102,10 @@ var fx_layer: FXLayer
 var weather_layer: WeatherLayer
 var weather_overlay: WeatherOverlay
 var bg_sprite: Sprite2D
+# 背景采用可平铺的废土地面纹理：覆盖整个战场、任意缩放下都保持清晰，
+# 彻底解决“单张大图拉伸后放大模糊 / 与房间比例不匹配”的问题。
 var bg_paths: Array = [
-	"res://assets/backgrounds/bg_wasteland_new.png",
-	"res://assets/backgrounds/bg_bunker.png",
-	"res://assets/backgrounds/bg_forest.png",
-	"res://assets/backgrounds/bg_wasteland.png",
+	"res://assets/sheets/ground_detail.png",
 ]
 var bg_index: int = 0
 
@@ -180,10 +179,9 @@ func _rezoom() -> void:
 	if camera == null:
 		return
 	var vp: Vector2 = get_viewport_rect().size
-	# 默认聚焦在真实基地（城墙 + 内部建筑）并留少量外围废土边距，
-	# 使房间在不同分辨率下都清晰可见；玩家可滚轮缩放查看全局战场。
-	var margin_tiles: int = 10
-	var focus_tiles: float = float(BattleSim.WALL_HALF * 2 + margin_tiles * 2)
+	# 默认聚焦在真实基地（城墙 40x40 内部 20x20 建筑集群）并留少量外围边距，
+	# 使房间一进入游戏就清晰可见；玩家可滚轮缩放查看全局战场。
+	var focus_tiles: float = 40.0
 	var focus_px: float = focus_tiles * TILE
 	var avail_w: float = max(vp.x - 32.0, 100.0)
 	var avail_h: float = max(vp.y - HUD_TOP - HUD_BOTTOM, 100.0)
@@ -202,7 +200,7 @@ func _grid_center_world() -> Vector2:
 func _intro_camera() -> void:
 	if camera == null:
 		return
-	var start_zoom: float = clampf(base_zoom * 0.55, 0.02, 10.0)
+	var start_zoom: float = clampf(base_zoom * 0.85, 0.02, 10.0)
 	camera.zoom = Vector2(start_zoom, start_zoom)
 	_intro_tween = create_tween()
 	_intro_tween.tween_property(camera, "zoom", Vector2(base_zoom, base_zoom), 2.0).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
@@ -217,7 +215,10 @@ func _setup_background() -> void:
 	bg_sprite = Sprite2D.new()
 	bg_sprite.z_as_relative = false
 	bg_sprite.z_index = -10
-	bg_sprite.centered = true
+	bg_sprite.centered = false
+	# 平铺：让 512x512 无缝地面纹理重复铺满整个战场，任意缩放下都清晰
+	bg_sprite.texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED
+	bg_sprite.region_enabled = true
 	add_child(bg_sprite)
 	_set_background(bg_index)
 
@@ -227,11 +228,11 @@ func _set_background(idx: int) -> void:
 	if tex == null:
 		return
 	bg_sprite.texture = tex
+	# 用 region 把纹理平铺覆盖整个战场（grid.size*TILE），scale 保持 1:1 不拉伸
 	var world_px: float = float(grid.size) * TILE
-	# 等比缩放：按背景图高度覆盖整个战场高度，宽度自然超出，保持 16:9 不拉伸
-	var scale: float = world_px / tex.get_height()
-	bg_sprite.scale = Vector2(scale, scale)
-	bg_sprite.position = _grid_center_world()
+	bg_sprite.region_rect = Rect2(0, 0, world_px, world_px)
+	bg_sprite.scale = Vector2(1.0, 1.0)
+	bg_sprite.position = Vector2(0, 0)
 
 func _cycle_weather() -> void:
 	var states: Array = ["clear", "rain", "snow"]

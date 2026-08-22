@@ -55,6 +55,26 @@ class Buf {
     this.d[i+2] = Math.round((c.b*af + this.d[i+2]*ia*da) / outA);
     this.d[i+3] = Math.round(outA * 255);
   }
+  // 可平铺绘制：坐标环绕，用于无缝地面纹理
+  setMod(x, y, c) {
+    x = ((Math.round(x) % this.w) + this.w) % this.w;
+    y = ((Math.round(y) % this.h) + this.h) % this.h;
+    this.set(x, y, c);
+  }
+  rectMod(x, y, w, h, c) { for (let yy=0; yy<h; yy++) for (let xx=0; xx<w; xx++) this.setMod(x+xx, y+yy, c); }
+  circleMod(cx, cy, r, c) { const r2=r*r; for (let yy=-r; yy<=r; yy++) for (let xx=-r; xx<=r; xx++) if (xx*xx+yy*yy<=r2) this.setMod(cx+xx, cy+yy, c); }
+  lineMod(x0, y0, x1, y1, c, t=1) {
+    x0=Math.round(x0); y0=Math.round(y0); x1=Math.round(x1); y1=Math.round(y1);
+    const dx=Math.abs(x1-x0), dy=Math.abs(y1-y0), sx=x0<x1?1:-1, sy=y0<y1?1:-1;
+    let err=dx-dy, x=x0, y=y0;
+    while (true) {
+      if (t<=1) this.setMod(x,y,c); else this.circleMod(x,y,t/2,c);
+      if (x===x1 && y===y1) break;
+      const e2=2*err;
+      if (e2>-dy){ err-=dy; x+=sx; }
+      if (e2<dx){ err+=dx; y+=sy; }
+    }
+  }
   rect(x, y, w, h, c) { for (let yy=0; yy<h; yy++) for (let xx=0; xx<w; xx++) this.set(x+xx, y+yy, c); }
   // 圆角矩形
   rrect(x, y, w, h, r, c) {
@@ -214,46 +234,103 @@ function drawZombie(b, f, base, kind) {
   }
 }
 
+// 通用：厚实墙体边框（俯视，左上高光/右下阴影，营造立体感）
+function drawBunkerWall(b, t, wallColor) {
+  const w = b.w, h = b.h;
+  const light = shade(wallColor, 1.22);
+  const mid   = shade(wallColor, 0.95);
+  const dark  = shade(wallColor, 0.62);
+  const innerShadow = shade(wallColor, 0.45);
+  // 四边墙体（上/左亮，下/右暗，模拟顶光）
+  b.rect(0, 0, w, t, light);      // 上边
+  b.rect(0, 0, t, h, light);      // 左边
+  b.rect(0, h - t, w, t, dark);   // 下边
+  b.rect(w - t, 0, t, h, dark);   // 右边
+  // 内部次层，让墙体有厚度
+  b.rect(t, t, w - 2*t, h - 2*t, mid);
+  // 四角加固块
+  const c = t * 1.6;
+  b.rect(0, 0, c, c, mid);
+  b.rect(w - c, 0, c, c, mid);
+  b.rect(0, h - c, c, c, mid);
+  b.rect(w - c, h - c, c, c, mid);
+  // 内沿阴影，强化“墙体高于地板”的空间感
+  b.rect(t, t, w - 2*t, 3, innerShadow);
+  b.rect(t, t, 3, h - 2*t, innerShadow);
+}
+
+// 通用：混凝土地砖/金属地板（带内网格与铆钉）
+function drawRoomFloor(b, inset, floorColor, gridColor) {
+  const w = b.w, h = b.h;
+  b.rect(inset, inset, w - inset*2, h - inset*2, floorColor);
+  // 地板接缝网格
+  const cols = 3, rows = 3;
+  for (let i=1;i<cols;i++) {
+    const x = inset + i * (w - inset*2) / cols;
+    b.line(x, inset, x, h - inset, gridColor, 1);
+  }
+  for (let i=1;i<rows;i++) {
+    const y = inset + i * (h - inset*2) / rows;
+    b.line(inset, y, w - inset, y, gridColor, 1);
+  }
+  // 随机铆钉/螺栓点缀
+  for (let i=0;i<6;i++) {
+    const rx = inset + 8 + (i%3) * ((w - inset*2)/3);
+    const ry = inset + 8 + Math.floor(i/3) * ((h - inset*2)/3);
+    b.circle(rx, ry, 2, shade(floorColor, 0.7));
+  }
+}
+
 // 防御塔：拆成「底座」+「炮管」。底座不旋转；炮管单独精灵，由程序旋转。
-// 防御塔阵地 3x3：沙袋围成的碉堡，带中央转台、雷达、弹药箱
+// 防御塔阵地 3x3：厚实混凝土碉堡，完整墙体无缺口，中央转台、雷达、弹药箱
 function drawTurretBase(b) {
   const w = b.w, h = b.h, cx = w/2, cy = h/2;
-  // 沙袋围墙（四角和四边）
-  const sand = C(115, 105, 80);
-  const sandDark = C(82, 75, 58);
-  // 四边沙袋
-  for (let i=0; i<6; i++) {
-    const sx = 14 + i*28;
-    b.ellipse(sx, 14, 12, 7, sandDark); b.ellipse(sx, 12, 12, 7, sand);
-    b.ellipse(sx, h-14, 12, 7, sandDark); b.ellipse(sx, h-12, 12, 7, sand);
+  const wallColor = C(108, 102, 88);
+  const floorColor = C(58, 56, 52);
+  const gridColor  = C(42, 40, 38);
+  const t = 22;  // 墙体厚度
+
+  // 厚实混凝土碉堡外墙（完整无缺口）
+  drawBunkerWall(b, t, wallColor);
+  // 内部地板
+  drawRoomFloor(b, t + 4, floorColor, gridColor);
+
+  // 中央圆形转台（金属质感）
+  b.circle(cx, cy, 44, C(55, 58, 64));
+  b.circle(cx, cy, 36, C(78, 82, 90));
+  b.circle(cx, cy, 26, C(95, 100, 108));
+  // 转台轨道槽
+  for (let i=0;i<12;i++) {
+    const a = i * Math.PI * 2 / 12;
+    b.line(cx + Math.cos(a)*18, cy + Math.sin(a)*18,
+           cx + Math.cos(a)*30, cy + Math.sin(a)*30, C(45, 48, 54), 2);
   }
-  for (let i=0; i<4; i++) {
-    const sy = 24 + i*32;
-    b.ellipse(14, sy, 7, 12, sandDark); b.ellipse(12, sy, 7, 12, sand);
-    b.ellipse(w-14, sy, 7, 12, sandDark); b.ellipse(w-12, sy, 7, 12, sand);
-  }
-  // 中央混凝土地基
-  b.circle(cx, cy, 46, C(45, 48, 52));
-  b.circle(cx, cy, 38, C(68, 72, 78));
   // 旋转轴凹槽（炮管底座）
   b.circle(cx, cy, 18, C(44, 50, 58));
   b.circle(cx, cy, 10, C(120, 200, 255, 180));
-  // 后方雷达（带旋转条纹）
-  const rx = w*0.76, ry = h*0.26;
-  b.rrect(rx-10, ry-14, 20, 28, 3, C(70, 75, 82));
-  b.circle(rx, ry-16, 8, C(80, 85, 92));
-  b.line(rx-14, ry-16, rx+14, ry-16, C(60, 200, 120), 2);
-  // 左侧弹药箱
-  const ax = w*0.18, ay = h*0.72;
+
+  // 后方雷达立柱
+  const rx = w*0.78, ry = h*0.24;
+  b.rrect(rx-6, ry-4, 12, 26, 2, C(70, 75, 82));
+  b.circle(rx, ry-14, 10, C(80, 85, 92));
+  b.line(rx-16, ry-14, rx+16, ry-14, C(60, 200, 120), 3);
+
+  // 左侧弹药箱堆
+  const ax = w*0.18, ay = h*0.74;
   for (let i=0; i<3; i++) {
-    b.rrect(ax + i*14, ay - i*6, 14, 12, 2, C(95, 90, 78));
-    b.line(ax + i*14 + 2, ay - i*6 + 6, ax + i*14 + 12, ay - i*6 + 6, C(70, 66, 58), 1);
+    b.rrect(ax + i*14, ay - i*6, 16, 14, 2, C(95, 90, 78));
+    b.line(ax + i*14 + 2, ay - i*6 + 7, ax + i*14 + 14, ay - i*6 + 7, C(70, 66, 58), 1);
   }
+
   // 右侧油桶
-  const bx = w*0.82, by = h*0.70;
-  b.ellipse(bx, by+12, 10, 4, C(0,0,0,80));
-  b.rrect(bx-8, by-14, 16, 28, 3, C(95, 75, 55));
-  b.line(bx-8, by-4, bx+8, by-4, C(70, 55, 40), 2);
+  const bx = w*0.83, by = h*0.72;
+  b.ellipse(bx, by+13, 11, 4, C(0,0,0,80));
+  b.rrect(bx-9, by-15, 18, 30, 3, C(95, 75, 55));
+  b.line(bx-9, by-4, bx+9, by-4, C(70, 55, 40), 2);
+
+  // 门口/观察窗：墙上缺口（不破坏整体轮廓，只增加识别度）
+  b.rect(t + 4, h*0.45, 8, 22, C(35, 38, 42)); // 左墙内嵌窗
+  b.rect(w - t - 12, h*0.40, 8, 18, C(35, 38, 42)); // 右墙内嵌窗
 }
 
 function drawTurretBarrel(b, fireFrame) {
@@ -275,20 +352,21 @@ function drawTurretBarrel(b, fireFrame) {
   }
 }
 
-// 核心/指挥 4x4：《辐射》避难所式指挥中心，带全息作战桌、电脑、椅子和脉动核心
+// 核心/指挥 4x4：《辐射》避难所式指挥中心，带厚实墙体、全息作战桌、电脑、椅子和脉动核心
 function drawCore(b, f) {
   const w = b.w, h = b.h, cx = w/2, cy = h/2;
   const pulse = 0.5 + 0.5*Math.sin(f/4*Math.PI*2);
-  // 外墙与地板
-  b.rrect(4, 4, w-8, h-8, 6, C(82, 78, 72));
-  b.rrect(8, 8, w-16, h-16, 4, C(58, 56, 52));
-  // 地砖网格
-  for (let i=1;i<4;i++) {
-    b.line(8 + i*(w-16)/4, 8, 8 + i*(w-16)/4, h-8, C(45, 43, 40), 1);
-    b.line(8, 8 + i*(h-16)/4, w-8, 8 + i*(h-16)/4, C(45, 43, 40), 1);
-  }
+  const wallColor = C(95, 90, 84);
+  const floorColor = C(52, 50, 46);
+  const gridColor  = C(38, 36, 34);
+  const t = 26;  // 指挥中心墙体更厚重
+
+  // 厚实外墙 + 内部地板
+  drawBunkerWall(b, t, wallColor);
+  drawRoomFloor(b, t + 4, floorColor, gridColor);
+
   // 中央全息作战桌（闪烁）
-  const tblW = (w-16)*0.55, tblH = (h-16)*0.35;
+  const tblW = (w - t*2)*0.55, tblH = (h - t*2)*0.35;
   b.ellipse(cx, cy + tblH*0.45, tblW*0.45, tblH*0.25, C(0,0,0,90));
   b.rrect(cx - tblW/2, cy - tblH/2, tblW, tblH, 6, C(55, 70, 85));
   b.rrect(cx - tblW/2 + 4, cy - tblH/2 + 4, tblW - 8, tblH - 8, 4, C(40, 55, 70));
@@ -303,38 +381,45 @@ function drawCore(b, f) {
     b.tri(cx, cy, x1, y1, x2, y2, C(120, 200, 255, 90 + pulse*60));
   }
   b.circle(cx, cy, 6 + pulse*3, C(160, 220, 255, 140 + pulse*80));
+
   // 四台电脑（角落，屏幕闪烁）
   const screenGlow = 120 + pulse*80;
-  const corners = [[14,14], [w-34,14], [14,h-34], [w-34,h-34]];
+  const margin = t + 8;
+  const corners = [[margin, margin], [w-margin-24, margin], [margin, h-margin-18], [w-margin-24, h-margin-18]];
   for (const [rx, ry] of corners) {
     b.rrect(rx, ry, 24, 18, 3, C(65, 62, 58));
     b.rrect(rx+3, ry+3, 18, 10, 2, C(screenGlow*0.4, screenGlow*0.55, screenGlow*0.7));
-    // 屏幕内容线
     b.line(rx+5, ry+6, rx+18, ry+6, C(180, 210, 230, 180), 1);
     b.line(rx+5, ry+9, rx+14, ry+9, C(180, 210, 230, 180), 1);
-    // 椅子
     b.rrect(rx+6, ry+20, 12, 8, 2, C(90, 55, 45));
   }
+
   // 顶部 status 灯带
   for (let i=0;i<5;i++) {
     const lx = cx - 40 + i*20;
     const on = (i + f) % 5 < 2;
-    b.circle(lx, 16, 4, on ? C(255, 80, 60) : C(80, 70, 65));
+    b.circle(lx, t + 6, 4, on ? C(255, 80, 60) : C(80, 70, 65));
   }
 }
 
-// 生产/储藏房 3x2：《辐射》式车间/储藏室，带货架、桶、工作台、转动齿轮与蒸汽
+// 生产/储藏房 3x2：《辐射》式车间/储藏室，带厚实墙体、货架、桶、工作台、转动齿轮与蒸汽
 function drawProduction(b, f) {
   const w = b.w, h = b.h, cx = w/2, cy = h/2;
-  // 外墙与地板
-  b.rrect(4, 4, w-8, h-8, 5, C(78, 74, 66));
-  b.rrect(8, 8, w-16, h-16, 3, C(52, 50, 46));
+  const wallColor = C(88, 84, 76);
+  const floorColor = C(55, 53, 48);
+  const gridColor  = C(40, 38, 35);
+  const t = 18;  // 3x2 房间墙体厚度
+
+  // 厚实外墙 + 内部地板
+  drawBunkerWall(b, t, wallColor);
+  drawRoomFloor(b, t + 3, floorColor, gridColor);
+
   // 左侧货架（储藏室特征）
   for (let row=0; row<3; row++) {
-    const y = 14 + row*22;
-    b.line(14, y, 14 + w*0.38, y, C(95, 88, 78), 3);
+    const y = t + 10 + row*22;
+    b.line(t + 8, y, t + 8 + w*0.36, y, C(95, 88, 78), 3);
     for (let item=0; item<4; item++) {
-      const ix = 18 + item*16;
+      const ix = t + 12 + item*16;
       const boxCol = (item + row) % 2 === 0 ? C(110, 95, 70) : C(90, 82, 72);
       b.rrect(ix, y - 14, 12, 12, 2, boxCol);
     }
@@ -356,13 +441,13 @@ function drawProduction(b, f) {
   b.circle(gx, gy, 8, C(75, 68, 58));
   b.circle(gx, gy, 3, C(45, 42, 38));
   // 蒸汽/烟雾（帧动画上升）
-  const smokeY = 12 - ((f*8) % 28);
+  const smokeY = t + 2 - ((f*8) % 28);
   b.circle(w*0.82, smokeY + 18, 5 + (f%2), C(180, 180, 185, 130));
   b.circle(w*0.85, smokeY + 6, 4, C(160, 160, 165, 100));
   // 桶
-  b.ellipse(w*0.25, h - 14, 10, 5, C(0,0,0,80));
-  b.rrect(w*0.25 - 8, h - 34, 16, 22, 3, C(90, 85, 75));
-  b.line(w*0.25 - 8, h - 28, w*0.25 + 8, h - 28, C(70, 66, 58), 2);
+  b.ellipse(w*0.25, h - t - 6, 10, 5, C(0,0,0,80));
+  b.rrect(w*0.25 - 8, h - t - 26, 16, 22, 3, C(90, 85, 75));
+  b.line(w*0.25 - 8, h - t - 20, w*0.25 + 8, h - t - 20, C(70, 66, 58), 2);
 }
 
 // 墙：4 个等级，每级 2 帧（完好/破损）。level=0..3
@@ -429,6 +514,52 @@ function drawBullet(b) {
   b.circle(cx-2, cy-2, 2.5, C(255,255,255,255));
 }
 
+// 地面细节覆盖层：512x512 可平铺裂纹/碎石纹理，解决放大后背景图模糊
+function drawGroundTile(b) {
+  const w = b.w, h = b.h;
+  const base = C(108, 102, 94);
+  // 基础色调（整数周期余弦，保证 512 边界处无缝平铺）
+  const TAU = Math.PI * 2;
+  for (let y=0; y<h; y++) {
+    for (let x=0; x<w; x++) {
+      const u = x / w, v = y / h;
+      const n1 = Math.cos(TAU * u * 3) * Math.cos(TAU * v * 2);
+      const n2 = Math.cos(TAU * (u + v) * 2);
+      const n3 = Math.cos(TAU * u * 5) * Math.cos(TAU * v * 4);
+      const vv = (n1 + n2 * 0.5 + n3 * 0.25) / 1.75;
+      const f = 1.0 + vv * 0.16;
+      b.rectMod(x, y, 1, 1, shade(base, f));
+    }
+  }
+  // 裂纹（随机游走，可环绕）
+  const crackCol = C(55, 52, 48, 180);
+  for (let i=0; i<18; i++) {
+    let x = Math.random() * w, y = Math.random() * h;
+    const steps = 30 + Math.random() * 50;
+    const seg = 8 + Math.random() * 12;
+    for (let s=0; s<steps; s++) {
+      const a = Math.random() * Math.PI * 2;
+      const nx = x + Math.cos(a) * seg;
+      const ny = y + Math.sin(a) * seg;
+      b.lineMod(x, y, nx, ny, crackCol, 1 + Math.random()*1.5);
+      x = nx; y = ny;
+    }
+  }
+  // 碎石/小土块（可环绕）
+  for (let i=0; i<120; i++) {
+    const x = Math.random() * w, y = Math.random() * h;
+    const r = 1 + Math.random() * 3;
+    const c = Math.random() > 0.5 ? C(125, 118, 108) : C(85, 80, 74);
+    b.circleMod(x, y, r, c);
+  }
+  // 更暗的污渍斑块
+  for (let i=0; i<25; i++) {
+    const x = Math.random() * w, y = Math.random() * h;
+    const r = 8 + Math.random() * 20;
+    b.circleMod(x, y, r, C(70, 66, 60, 60));
+  }
+}
+
 // ---------- 输出精灵表 ----------
 function sheet(name, cols, drawFn, fw=FRAME, fh=FRAME) {
   console.error(`[sheet] ${name} start (cols=${cols}, frame=${fw}x${fh})`);
@@ -463,4 +594,5 @@ sheet('core', 4, (b,f)=>drawCore(b,f), 256, 256);
 sheet('production', 4, (b,f)=>drawProduction(b,f), 192, 128);
 sheet('wall', 8, (b,f)=>drawWall(b, f));
 sheet('bullet', 1, (b)=>drawBullet(b));
+sheet('ground_detail', 1, (b,f)=>drawGroundTile(b), 512, 512);
 console.log('完成 ->', OUT);

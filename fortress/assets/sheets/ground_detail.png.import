@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://ckueanyfegvi1"
-path="res://.godot/imported/turret_barrel.png-9e2ba9469e45e9d3766e5e4cd9dc63cd.ctex"
+uid="uid://bjckilwlaulvt"
+path="res://.godot/imported/ground_detail.png-cf98c312f9bacea39be43c89468544b7.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/sheets/turret_barrel.png"
-dest_files=["res://.godot/imported/turret_barrel.png-9e2ba9469e45e9d3766e5e4cd9dc63cd.ctex"]
+source_file="res://assets/sheets/ground_detail.png"
+dest_files=["res://.godot/imported/ground_detail.png-cf98c312f9bacea39be43c89468544b7.ctex"]
 
 [params]
 
