@@ -13,7 +13,7 @@ const HUD := preload("res://hud.gd")
 
 const TILE := 64               # 单元格像素（与精灵表帧尺寸一致）
 const HUD_TOP := 44.0
-const HUD_BOTTOM := 92.0
+const HUD_BOTTOM := 124.0
 const SPRITE_SIZE := 64
 
 # —— 配色（末日地下堡垒：冷岩 + 暖橙威胁色）——

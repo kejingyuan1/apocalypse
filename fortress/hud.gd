@@ -93,7 +93,7 @@ func set_state(state: String, army: Dictionary, alive: int, total: int, selected
 	label.add_theme_color_override("font_color", DANGER_ORANGE)
 
 	if fallout_menu:
-		fallout_menu.queue_redraw()
+		fallout_menu.refresh()
 
 	match state:
 		"deploy", "combat":
