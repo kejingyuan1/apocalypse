@@ -41,6 +41,14 @@ var building_hit_events: Array = [] # 本 tick 建筑受击：{pos:Vector2(单�
 var total_shots: int = 0         # 累计开火数（验证用）
 var army_total: int = 0          # 初始总兵力
 var waypoints: Array = []        # Vector2 路径点（单元坐标），部队优先前往
+var weather: String = "clear"    # clear | rain | snow，影响攻防数值
+
+# 天气对玩法的实质影响：雨天泥泞减速、雪天严寒大减速，恶劣天气降低防御塔效能
+const WEATHER_MODS := {
+	"clear": {"speed": 1.00, "range": 1.00, "dmg": 1.00},
+	"rain":  {"speed": 0.80, "range": 0.90, "dmg": 0.85},
+	"snow":  {"speed": 0.65, "range": 0.80, "dmg": 0.90},
+}
 
 func _init(g: GridModel) -> void:
 	grid = g
@@ -154,6 +162,13 @@ func army_left() -> int:
 		n += v
 	return n
 
+func set_weather(state: String) -> void:
+	weather = state
+
+func _weather_mod(key: String) -> float:
+	var mods: Dictionary = WEATHER_MODS.get(weather, {})
+	return float(mods.get(key, 1.0))
+
 func set_waypoints(pts: Array) -> void:
 	waypoints = []
 	for p in pts:
@@ -223,6 +238,7 @@ func _neighbors(c: Vector2i) -> Array:
 
 # —— 单只进攻单位：相邻有建筑则攻击最薄弱者；否则沿距离场向最近建筑推进 ——
 func _move_unit(u: RefCounted, dist: Dictionary) -> void:
+	var speed_mul: float = _weather_mod("speed")
 	var cur: Vector2i = Vector2i(floor(u.pos.x), floor(u.pos.y))
 	# 1. 相邻有建筑 → 攻击最薄弱者（城墙/塔/核心均可被拆）
 	var atk_cell: Vector2i = Vector2i(-1, -1)
@@ -268,10 +284,11 @@ func _move_unit(u: RefCounted, dist: Dictionary) -> void:
 				if best_wp != cur:
 					var target_wp: Vector2 = Vector2(best_wp.x + 0.5, best_wp.y + 0.5)
 					var to_wp: Vector2 = target_wp - u.pos
-					if to_wp.length() <= u.speed:
+					var eff_speed_wp: float = u.speed * speed_mul
+					if to_wp.length() <= eff_speed_wp:
 						u.pos = target_wp
 					else:
-						u.pos += to_wp.normalized() * u.speed
+						u.pos += to_wp.normalized() * eff_speed_wp
 				return
 	# 3. 朝最近建筑移动
 	var best: Vector2i = cur
@@ -288,13 +305,17 @@ func _move_unit(u: RefCounted, dist: Dictionary) -> void:
 	var target: Vector2 = Vector2(best.x + 0.5, best.y + 0.5)
 	var to: Vector2 = target - u.pos
 	var len: float = to.length()
-	if len <= u.speed:
+	var eff_speed: float = u.speed * speed_mul
+	if len <= eff_speed:
 		u.pos = target
 	else:
-		u.pos += to.normalized() * u.speed
+		u.pos += to.normalized() * eff_speed
 
 # —— 防御塔自动开火：每 tick 命中射程内最近进攻单位 ——
 func _defense_fire() -> void:
+	var range_mul: float = _weather_mod("range")
+	var dmg_mul: float = _weather_mod("dmg")
+	var eff_range: float = DEFENSE_RANGE_CELLS * range_mul
 	for id in grid.rooms:
 		var r: Dictionary = grid.rooms[id]
 		if r["type"] != RoomDefs.Type.DEFENSE:
@@ -304,13 +325,14 @@ func _defense_fire() -> void:
 		var best_d: float = INF
 		for u in units:
 			var d: float = center.distance_to(u.pos)
-			if d <= DEFENSE_RANGE_CELLS and d < best_d:
+			if d <= eff_range and d < best_d:
 				best_d = d
 				target = u
 		if target != null:
-			target.hp -= DEFENSE_DMG
-			fire_events.append({"from": center, "to": target.pos, "dmg": DEFENSE_DMG})
-			hit_events.append({"pos": target.pos, "dmg": DEFENSE_DMG})
+			var dmg: int = maxi(1, roundi(DEFENSE_DMG * dmg_mul))
+			target.hp -= dmg
+			fire_events.append({"from": center, "to": target.pos, "dmg": dmg})
+			hit_events.append({"pos": target.pos, "dmg": dmg})
 			total_shots += 1
 
 func _room_center(r: Dictionary) -> Vector2:

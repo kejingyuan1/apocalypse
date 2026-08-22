@@ -65,8 +65,8 @@ const ZOMBIE_SHEETS := {
 var grid: GridModel
 var sim: BattleSim
 
-# 模式："attack" = COC 式进攻；"editor" = 基地编辑器
-var game_mode: String = "attack"
+# 模式："attack" = COC 式进攻；"editor" = 基地编辑器（默认进入，像 COC 一样先回家）
+var game_mode: String = "editor"
 
 # 进攻模式：多选兵种 + 拖拽下兵 + 路径点
 var selected_kinds: Array = [Zombie.Kind.WALKER]
@@ -102,10 +102,12 @@ var fx_layer: FXLayer
 var weather_layer: WeatherLayer
 var weather_overlay: WeatherOverlay
 var bg_sprite: Sprite2D
-# 背景采用可平铺的废土地面纹理：覆盖整个战场、任意缩放下都保持清晰，
-# 彻底解决“单张大图拉伸后放大模糊 / 与房间比例不匹配”的问题。
+# 背景采用之前的 16:9 横屏废土地面彩绘（bg_wasteland_new.png），通过 CanvasLayer+TextureRect
+# 等比铺满屏幕；游戏世界渲染在其上方，房间比例由相机聚焦真实基地控制。
+var bg_canvas: CanvasLayer
+var bg_rect: TextureRect
 var bg_paths: Array = [
-	"res://assets/sheets/ground_detail.png",
+	"res://assets/backgrounds/bg_wasteland_new.png",
 ]
 var bg_index: int = 0
 
@@ -139,29 +141,44 @@ var _intro_tween: Tween = null
 func _ready() -> void:
 	_setup_layers()
 	grid = GridModel.new()
-	if OS.get_cmdline_user_args().has("--editor"):
-		game_mode = "editor"
+	var user_args: PackedStringArray = OS.get_cmdline_user_args()
+	if user_args.has("--attack"):
+		game_mode = "attack"
 	# 战斗内核会自行设定网格尺寸并生成敌方基地
 	sim = BattleSim.new(grid)
 	_setup_camera()
 	_setup_background()
-	if game_mode == "attack":
-		_try_load_saved_layout()
+	# 两种模式都尝试加载已保存基地：进攻打别人的，编辑回自己的
+	_try_load_saved_layout()
 	_sync_rooms()
 	_sync_state()
 	ambient_layer.spawn_ambient()
 	weather_layer.set_weather("clear")
+	sim.set_weather("clear")
 	_intro_camera()
-	if OS.get_cmdline_user_args().has("--shot"):
+	if user_args.has("--shot"):
 		_dev_shot_setup()
 
 func _setup_layers() -> void:
+	# 屏幕空间背景层（最底层，避免随相机缩放而模糊/拉伸）
+	bg_canvas = CanvasLayer.new()
+	bg_canvas.layer = -1
+	bg_canvas.name = "BGCanvas"
+	add_child(bg_canvas)
+	bg_rect = TextureRect.new()
+	bg_rect.name = "BGRect"
+	bg_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	bg_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	bg_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bg_canvas.add_child(bg_rect)
+
 	bg_layer = BGLayer.new(); bg_layer.main = self; add_child(bg_layer)
 	ambient_layer = AmbientLayer.new(); ambient_layer.main = self; add_child(ambient_layer)
 	unit_layer = Node2D.new(); add_child(unit_layer)
 	fx_layer = FXLayer.new(); fx_layer.main = self; add_child(fx_layer)
 	weather_layer = WeatherLayer.new(); weather_layer.main = self; add_child(weather_layer)
-	# 天气覆盖层：全屏色调遮罩 + 太阳图标/光芒 + 天气文字 + 淡化平台水印
+	# 天气覆盖层：全屏色调遮罩 + 太阳图标/光芒 + 天气文字
 	weather_overlay = WeatherOverlay.new()
 	weather_overlay.main = self
 	add_child(weather_overlay)
@@ -179,9 +196,9 @@ func _rezoom() -> void:
 	if camera == null:
 		return
 	var vp: Vector2 = get_viewport_rect().size
-	# 默认聚焦在真实基地（城墙 40x40 内部 20x20 建筑集群）并留少量外围边距，
-	# 使房间一进入游戏就清晰可见；玩家可滚轮缩放查看全局战场。
-	var focus_tiles: float = 40.0
+	# 编辑器模式聚焦更紧，让房间更大、更像 COC 回家视角；
+	# 进攻模式留略多外围，方便观察全局下兵。
+	var focus_tiles: float = 34.0 if game_mode == "editor" else 42.0
 	var focus_px: float = focus_tiles * TILE
 	var avail_w: float = max(vp.x - 32.0, 100.0)
 	var avail_h: float = max(vp.y - HUD_TOP - HUD_BOTTOM, 100.0)
@@ -212,14 +229,6 @@ func _cancel_intro() -> void:
 
 # ===================== 背景皮肤 =====================
 func _setup_background() -> void:
-	bg_sprite = Sprite2D.new()
-	bg_sprite.z_as_relative = false
-	bg_sprite.z_index = -10
-	bg_sprite.centered = false
-	# 平铺：让 512x512 无缝地面纹理重复铺满整个战场，任意缩放下都清晰
-	bg_sprite.texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED
-	bg_sprite.region_enabled = true
-	add_child(bg_sprite)
 	_set_background(bg_index)
 
 func _set_background(idx: int) -> void:
@@ -227,12 +236,8 @@ func _set_background(idx: int) -> void:
 	var tex := load(bg_paths[bg_index]) as Texture2D
 	if tex == null:
 		return
-	bg_sprite.texture = tex
-	# 用 region 把纹理平铺覆盖整个战场（grid.size*TILE），scale 保持 1:1 不拉伸
-	var world_px: float = float(grid.size) * TILE
-	bg_sprite.region_rect = Rect2(0, 0, world_px, world_px)
-	bg_sprite.scale = Vector2(1.0, 1.0)
-	bg_sprite.position = Vector2(0, 0)
+	if bg_rect:
+		bg_rect.texture = tex
 
 func _cycle_weather() -> void:
 	var states: Array = ["clear", "rain", "snow"]
@@ -242,10 +247,23 @@ func _cycle_weather() -> void:
 	weather_layer.set_weather(next)
 	if weather_overlay:
 		weather_overlay.set_weather(next)
+	if sim:
+		sim.set_weather(next)
 	_show_toast("天气：%s" % weather_layer.weather_name(), Color(0.6, 0.85, 1.0))
 
 # ===================== 输入 =====================
+func _is_mouse_over_ui() -> bool:
+	var hovered: Control = get_viewport().gui_get_hovered_control()
+	if hovered == null:
+		return false
+	var menu: Control = hud.get_node_or_null("FalloutMenu")
+	if menu == null:
+		return false
+	return hovered == menu or menu.is_ancestor_of(hovered)
+
 func _input(event: InputEvent) -> void:
+	if _is_mouse_over_ui():
+		return
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
@@ -302,7 +320,6 @@ func _input(event: InputEvent) -> void:
 				KEY_C:
 					waypoints.clear()
 					sim.clear_waypoints()
-				KEY_B: _set_background(bg_index + 1)
 				KEY_V: _cycle_weather()
 		else:
 			if EDITOR_ROOM_KEYS.has(event.keycode):
@@ -449,6 +466,54 @@ func _editor_upgrade_under_cursor() -> void:
 				_show_toast("城墙已满级", Color(0.9, 0.5, 0.3))
 		else:
 			_show_toast("只有城墙可升级", Color(0.9, 0.5, 0.3))
+
+# ===================== 菜单/模式切换接口（供 FalloutMenu 调用） =====================
+func menu_select_room(type: int) -> void:
+	editor_selected_type = type
+	_sync_state()
+
+func menu_toggle_kind(kind: int) -> void:
+	_toggle_kind(kind)
+	_sync_state()
+
+func menu_cycle_weather() -> void:
+	_cycle_weather()
+
+func menu_save_layout() -> void:
+	_save_layout()
+
+func menu_load_layout() -> void:
+	_load_layout()
+
+func menu_clear_layout() -> void:
+	_editor_clear()
+
+func menu_upgrade_wall() -> void:
+	_editor_upgrade_under_cursor()
+
+func enter_attack_mode() -> void:
+	if game_mode == "attack":
+		return
+	_save_layout()
+	game_mode = "attack"
+	sim = BattleSim.new(grid)
+	_try_load_saved_layout()
+	_sync_rooms()
+	_sync_state()
+	_rezoom()
+	_intro_camera()
+
+func enter_editor_mode() -> void:
+	if game_mode == "editor":
+		return
+	_save_layout()
+	game_mode = "editor"
+	sim = BattleSim.new(grid)
+	_try_load_saved_layout()
+	_sync_rooms()
+	_sync_state()
+	_rezoom()
+	_intro_camera()
 
 func _editor_remove(c: Vector2i) -> void:
 	if grid.occupied.has(c):
