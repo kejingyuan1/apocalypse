@@ -22,6 +22,8 @@ var _room_buttons: Dictionary[int, TextureButton] = {}
 var _zombie_buttons: Dictionary[int, TextureButton] = {}
 var _editor_buttons: Array[TextureButton] = []
 var _attack_buttons: Array[TextureButton] = []
+var _hovered_btn: TextureButton = null
+var _pressed_btn: TextureButton = null
 
 func _ready() -> void:
 	main = get_node_or_null(main_path)
@@ -77,6 +79,8 @@ func _add_btn(tex_path: String, callback: Callable, tooltip: String, group: Arra
 	btn.custom_minimum_size = Vector2(BTN_SIZE, BTN_SIZE)
 	btn.ignore_texture_size = true
 	btn.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+	btn.pivot_offset = Vector2(BTN_SIZE, BTN_SIZE) * 0.5
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	var tex: Texture2D = load(tex_path) as Texture2D
 	if tex != null:
 		btn.texture_normal = tex
@@ -85,6 +89,8 @@ func _add_btn(tex_path: String, callback: Callable, tooltip: String, group: Arra
 	btn.pressed.connect(callback)
 	btn.mouse_entered.connect(_on_btn_hover.bind(btn, true))
 	btn.mouse_exited.connect(_on_btn_hover.bind(btn, false))
+	btn.button_down.connect(_on_btn_down.bind(btn))
+	btn.button_up.connect(_on_btn_up.bind(btn))
 	_row.add_child(btn)
 	if group.size() > 0:
 		group.append(btn)
@@ -102,26 +108,61 @@ func _layout() -> void:
 	_row.size = Vector2(vp.x, BTN_SIZE)
 
 func _on_btn_hover(btn: TextureButton, hovered: bool) -> void:
-	var base: float = _base_scale(btn)
-	var target: float = base * (1.12 if hovered else 1.0)
-	var tw: Tween = create_tween()
-	tw.tween_property(btn, "scale", Vector2(target, target), 0.12)
+	_hovered_btn = btn if hovered else null
+	_update_btn_visuals(btn, 0.12)
 
-func _base_scale(btn: TextureButton) -> float:
+func _on_btn_down(btn: TextureButton) -> void:
+	_pressed_btn = btn
+	_update_btn_visuals(btn, 0.06)
+
+func _on_btn_up(btn: TextureButton) -> void:
+	_pressed_btn = null
+	_update_btn_visuals(btn, 0.14)
+
+func _update_btn_visuals(btn: TextureButton, duration: float) -> void:
+	var selected: bool = _is_selected(btn)
+	var hovered: bool = _hovered_btn == btn
+	var pressed: bool = _pressed_btn == btn
+
+	var base_scale: float = 1.15 if selected else 1.0
+	var target_scale: float = base_scale
+	if pressed:
+		target_scale *= 0.92
+	elif hovered:
+		target_scale *= 1.10
+
+	var target_mod: Color = Color.WHITE
+	if selected and hovered:
+		target_mod = Color(1.35, 1.35, 1.35)
+	elif selected:
+		target_mod = Color(1.25, 1.25, 1.25)
+	elif hovered:
+		target_mod = Color(1.15, 1.15, 1.15)
+	if pressed:
+		target_mod *= 1.2
+
+	var tw: Tween = create_tween()
+	tw.set_parallel(true)
+	tw.set_trans(Tween.TRANS_CUBIC)
+	tw.set_ease(Tween.EASE_OUT)
+	tw.tween_property(btn, "scale", Vector2(target_scale, target_scale), duration)
+	tw.tween_property(btn, "modulate", target_mod, duration)
+
+func _is_selected(btn: TextureButton) -> bool:
 	if main == null:
-		return 1.0
+		return false
 	var mode: String = main.game_mode if main.get("game_mode") else "editor"
 	if mode == "editor":
 		if _room_buttons.has(main.editor_selected_type) and _room_buttons[main.editor_selected_type] == btn:
-			return 1.15
+			return true
 	else:
 		if main.selected_kinds.has(Zombie.Kind.WALKER) and _zombie_buttons.has(Zombie.Kind.WALKER) and _zombie_buttons[Zombie.Kind.WALKER] == btn:
-			return 1.15
+			return true
 		if main.selected_kinds.has(Zombie.Kind.RUNNER) and _zombie_buttons.has(Zombie.Kind.RUNNER) and _zombie_buttons[Zombie.Kind.RUNNER] == btn:
-			return 1.15
+			return true
 		if main.selected_kinds.has(Zombie.Kind.SPITTER) and _zombie_buttons.has(Zombie.Kind.SPITTER) and _zombie_buttons[Zombie.Kind.SPITTER] == btn:
-			return 1.15
-	return 1.0
+			return true
+	return false
 
 func refresh() -> void:
 	if main == null:
@@ -137,17 +178,15 @@ func refresh() -> void:
 
 	# 房间类型高亮
 	for type_id: int in _room_buttons.keys():
-		var btn: TextureButton = _room_buttons[type_id]
-		var selected: bool = is_editor and int(main.editor_selected_type) == type_id
-		btn.modulate = Color(1.25, 1.25, 1.25) if selected else Color.WHITE
-		btn.scale = Vector2(1.15, 1.15) if selected else Vector2.ONE
+		_update_btn_visuals(_room_buttons[type_id], 0.12)
 
 	# 兵种高亮
 	for kind: int in _zombie_buttons.keys():
-		var btn: TextureButton = _zombie_buttons[kind]
-		var selected: bool = (not is_editor) and main.selected_kinds.has(kind)
-		btn.modulate = Color(1.25, 1.25, 1.25) if selected else Color.WHITE
-		btn.scale = Vector2(1.15, 1.15) if selected else Vector2.ONE
+		_update_btn_visuals(_zombie_buttons[kind], 0.12)
+
+	# 系统按钮同步视觉
+	_update_btn_visuals(_weather_btn, 0.12)
+	_update_btn_visuals(_mode_btn, 0.12)
 
 	# 天气按钮显示当前天气
 	var weather: String = "clear"
