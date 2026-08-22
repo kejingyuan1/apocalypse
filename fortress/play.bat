@@ -2,9 +2,9 @@
 REM ============================================================
 REM  Apocalypse Fortress - one-click launcher
 REM  Double-click to play. Optional args:
-REM    play.bat            -> play (attack mode, default)
+REM    play.bat            -> play = attack mode, default
 REM    play.bat editor     -> open Godot editor
-REM    play.bat import     -> headless resource import (run once after clone)
+REM    play.bat import     -> headless resource import, run once after clone
 REM ============================================================
 setlocal
 
@@ -35,7 +35,7 @@ if "%~1"=="editor" (
 )
 
 if "%~1"=="import" (
-  echo Importing resources (headless) ...
+  echo Importing resources, headless mode ...
   "%GODOT%" --headless --editor --quit --path "%GAMEDIR%" > "%GAMEDIR%\godot_run.log" 2>&1
   echo Import done.
   goto :eof
@@ -45,7 +45,7 @@ echo Launching Apocalypse Fortress ...
 "%GODOT%" --path "%GAMEDIR%" > "%GAMEDIR%\godot_run.log" 2>&1
 if errorlevel 1 (
   echo.
-  echo [ERROR] Godot failed to start (exit code %errorlevel%). See godot_run.log
+  echo [ERROR] Godot failed to start, exit code %errorlevel%. See godot_run.log
   pause
 )
 
