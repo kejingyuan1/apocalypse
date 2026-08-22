@@ -828,15 +828,19 @@ func _sync_rooms() -> void:
 				sp.sprite_frames = _make_frames(cfg.path, cfg.anim, cfg.frames, cfg.fps, true)
 				sp.play(cfg.anim)
 				sp.position = center
+				# 城墙改用 BGLayer 无缝绘制 + FXLayer 发光流动，原精灵隐藏避免双边框缝隙
+				if type == RoomDefs.Type.WALL:
+					sp.visible = false
 				unit_layer.add_child(sp)
 				room_sprites[id] = sp
 			else:
 				room_sprites[id].position = center
-		if type == RoomDefs.Type.WALL:
-			var level: int = clampi(r.get("level", 0), 0, 3)
-			var max_hp: int = RoomDefs.wall_hp(level)
-			var ratio := float(r["hp"]) / float(max_hp)
-			room_sprites[id].frame = level * 2 + (0 if ratio > 0.5 else 1)
+				if type == RoomDefs.Type.WALL:
+					room_sprites[id].visible = false
+
+	# 城墙状态由程序层统一渲染，刷新背景层和特效层
+	bg_layer.queue_redraw()
+	fx_layer.queue_redraw()
 
 	for id: int in room_sprites.keys():
 		if not grid.rooms.has(id):
@@ -1281,6 +1285,7 @@ class BGLayer extends Node2D:
 
 	func _draw() -> void:
 		_draw_mountain()
+		_draw_walls()
 
 	func _draw_mountain() -> void:
 		var grid: GridModel = main.grid
@@ -1298,11 +1303,63 @@ class BGLayer extends Node2D:
 			var a := 0.05 * (r / 4.0)
 			draw_circle(cc, float(r) * TILE * 0.6, Color(0.91, 0.57, 0.24, a))
 
+	func _draw_walls() -> void:
+		var grid: GridModel = main.grid
+		if grid == null:
+			return
+		var wall_cells: Dictionary = {}
+		for id: int in grid.rooms:
+			var r: Dictionary = grid.rooms[id]
+			if r["type"] != RoomDefs.Type.WALL:
+				continue
+			var lv: int = clampi(r.get("level", 0), 0, 3)
+			for c: Vector2i in r["cells"]:
+				wall_cells[c] = lv
+		if wall_cells.is_empty():
+			return
+		var pad: float = 1.0
+		var border_col := Color(0.22, 0.20, 0.18, 0.92)
+		var highlight_col := Color(1.0, 1.0, 1.0, 0.16)
+		for c: Vector2i in wall_cells:
+			var lv: int = wall_cells[c]
+			var base: Color = RoomDefs.wall_color(lv)
+			var x: float = c.x * TILE - pad
+			var y: float = c.y * TILE - pad
+			var sz: float = TILE + pad * 2.0
+			# 无缝填充：相邻格子的矩形会轻微重叠，消除缝隙
+			draw_rect(Rect2(x, y, sz, sz), base)
+			# 顶部高光带
+			draw_rect(Rect2(x, y, sz, 3.0), Color(base.r + 0.07, base.g + 0.07, base.b + 0.07, 0.45))
+			# 左部高光带
+			draw_rect(Rect2(x, y, 3.0, sz), Color(base.r + 0.05, base.g + 0.05, base.b + 0.05, 0.35))
+			# 底部/右侧阴影
+			draw_rect(Rect2(x + sz - 3.0, y, 3.0, sz), Color(0.0, 0.0, 0.0, 0.22))
+			draw_rect(Rect2(x, y + sz - 3.0, sz, 3.0), Color(0.0, 0.0, 0.0, 0.22))
+			# 铆钉细节（增强砖石质感）
+			var rivet: Color = Color(base.r * 0.75, base.g * 0.75, base.b * 0.75, 0.5)
+			draw_circle(Vector2(x + sz * 0.25, y + sz * 0.28), 2.0, rivet)
+			draw_circle(Vector2(x + sz * 0.75, y + sz * 0.72), 2.0, rivet)
+		# 外边框：只在四邻不是城墙的边绘制，连续城墙内部无缝
+		for c: Vector2i in wall_cells:
+			var x0: float = c.x * TILE
+			var y0: float = c.y * TILE
+			var x1: float = x0 + TILE
+			var y1: float = y0 + TILE
+			if not wall_cells.has(c + Vector2i(0, -1)):
+				draw_line(Vector2(x0, y0), Vector2(x1, y0), border_col, 2.5)
+			if not wall_cells.has(c + Vector2i(0, 1)):
+				draw_line(Vector2(x0, y1), Vector2(x1, y1), border_col, 2.5)
+			if not wall_cells.has(c + Vector2i(-1, 0)):
+				draw_line(Vector2(x0, y0), Vector2(x0, y1), border_col, 2.5)
+			if not wall_cells.has(c + Vector2i(1, 0)):
+				draw_line(Vector2(x1, y0), Vector2(x1, y1), border_col, 2.5)
+
 
 class FXLayer extends Node2D:
 	var main: Node
 
 	func _draw() -> void:
+		_draw_wall_effects()
 		_draw_hp_bars()
 		_draw_flashes()
 		_draw_waypoints()
@@ -1481,6 +1538,72 @@ class FXLayer extends Node2D:
 			for off: Vector2 in [Vector2(-1, -1), Vector2(1, -1), Vector2(-1, 1), Vector2(1, 1)]:
 				draw_string(font, pos + off, t["text"], HORIZONTAL_ALIGNMENT_CENTER, -1, 18, Color(0, 0, 0, col.a))
 			draw_string(font, pos, t["text"], HORIZONTAL_ALIGNMENT_CENTER, -1, 18, col)
+
+	func _draw_wall_effects() -> void:
+		var grid: GridModel = main.grid
+		if grid == null:
+			return
+		var wall_cells: Dictionary = {}
+		var cell_level: Dictionary = {}
+		for id: int in grid.rooms:
+			var r: Dictionary = grid.rooms[id]
+			if r["type"] != RoomDefs.Type.WALL:
+				continue
+			var lv: int = clampi(r.get("level", 0), 0, 3)
+			for c: Vector2i in r["cells"]:
+				wall_cells[c] = true
+				cell_level[c] = lv
+		if wall_cells.is_empty():
+			return
+		var t: float = main.anim_time
+		# 能量流动：沿相邻城墙之间的公共边，从中心向中心移动的发光虚线
+		var flow_col := Color(1.0, 0.92, 0.55, 0.9)
+		var dirs: Array[Vector2i] = [Vector2i(1, 0), Vector2i(0, 1)]
+		for c: Vector2i in wall_cells:
+			for d: Vector2i in dirs:
+				var n: Vector2i = c + d
+				if not wall_cells.has(n):
+					continue
+				var p0: Vector2 = (Vector2(c.x, c.y) + Vector2(0.5, 0.5)) * TILE
+				var p1: Vector2 = (Vector2(n.x, n.y) + Vector2(0.5, 0.5)) * TILE
+				var dist: float = p0.distance_to(p1)
+				var along: Vector2 = (p1 - p0).normalized()
+				var seg_len: float = 7.0
+				var gap_len: float = 5.0
+				var phase: float = fmod(t * 22.0, seg_len + gap_len)
+				var count: int = int(dist / (seg_len + gap_len)) + 2
+				for i: int in range(count):
+					var base_d: float = i * (seg_len + gap_len) + phase
+					if base_d > dist:
+						break
+					var start_d: float = clampf(base_d, 0.0, dist)
+					var end_d: float = clampf(base_d + seg_len, 0.0, dist)
+					if end_d - start_d < 0.5:
+						continue
+					var a: Vector2 = p0 + along * start_d
+					var b: Vector2 = p0 + along * end_d
+					var pulse: float = 0.65 + 0.35 * sin(t * 3.5 + i * 0.8)
+					draw_line(a, b, Color(flow_col.r, flow_col.g, flow_col.b, flow_col.a * pulse), 2.8)
+		# 升级发光：等级 > 0 的城墙单元绘制脉冲高光
+		for c: Vector2i in wall_cells:
+			var lv: int = cell_level.get(c, 0)
+			if lv <= 0:
+				continue
+			var center: Vector2 = (Vector2(c.x, c.y) + Vector2(0.5, 0.5)) * TILE
+			var glow: Color
+			match lv:
+				1: glow = Color(1.0, 0.9, 0.45, 0.28)
+				2: glow = Color(1.0, 0.82, 0.28, 0.38)
+				3: glow = Color(1.0, 0.72, 0.18, 0.48)
+			var pulse: float = 0.85 + 0.15 * sin(t * 4.2 + c.x * 0.6 + c.y * 0.6)
+			# 外发光晕
+			for r: int in range(3, 0, -1):
+				var rr: float = TILE * (0.52 + (3 - r) * 0.1)
+				var a: float = glow.a * pulse * (float(r) / 3.0) * 0.4
+				draw_circle(center, rr, Color(glow.r, glow.g, glow.b, a))
+			# 亮边
+			var rect := Rect2(c.x * TILE + 2.5, c.y * TILE + 2.5, TILE - 5.0, TILE - 5.0)
+			draw_rect(rect, Color(glow.r, glow.g, glow.b, glow.a * pulse * 0.75))
 
 
 # ===================== 环境动态层：游荡僵尸、飞鸟 =====================
