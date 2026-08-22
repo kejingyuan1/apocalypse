@@ -5,6 +5,7 @@ REM  Double-click to play. Optional args:
 REM    play.bat            -> play = attack mode, default
 REM    play.bat editor     -> open Godot editor
 REM    play.bat import     -> headless resource import, run once after clone/pull
+REM    play.bat reset      -> DELETE .godot cache + re-import + launch (hard reset)
 REM
 REM  WHY THE AUTO-REIMPORT:
 REM  Godot does NOT auto-import assets in plain "--path" (game) mode.
@@ -42,6 +43,12 @@ if "%~1"=="import" (
   "%GODOT%" --headless --editor --quit --path "%GAMEDIR%" > "%GAMEDIR%\godot_run.log" 2>&1
   echo Import done.
   goto :eof
+)
+
+if "%~1"=="reset" (
+  echo [reset] Deleting import cache (.godot) ...
+  if exist "%GAMEDIR%\.godot" rmdir /s /q "%GAMEDIR%\.godot"
+  echo [reset] Cache cleared. Re-importing and launching ...
 )
 
 REM ---- auto re-import when needed (repo HEAD changed or cache missing) ----
