@@ -8,7 +8,7 @@ extends Control
 const RoomDefs := preload("res://core/room_defs.gd")
 const Zombie := preload("res://core/zombie.gd")
 
-const PANEL_H: float = 120.0
+const PANEL_H: float = 128.0
 const BTN_SIZE: float = 86.0
 const ROW_SEPARATION: int = 14
 
@@ -38,10 +38,10 @@ func _ready() -> void:
 func _add_panel() -> void:
 	_panel.name = "MenuPanel"
 	_panel.texture = load("res://assets/ui/menu_bar_bg.png") as Texture2D
-	_panel.patch_margin_left = 180
-	_panel.patch_margin_right = 180
-	_panel.patch_margin_top = 50
-	_panel.patch_margin_bottom = 50
+	_panel.patch_margin_left = 100
+	_panel.patch_margin_right = 100
+	_panel.patch_margin_top = 40
+	_panel.patch_margin_bottom = 40
 	add_child(_panel)
 
 func _add_button_row() -> void:
